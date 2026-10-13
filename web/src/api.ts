@@ -34,6 +34,73 @@ export interface Server {
   metrics?: Metrics
 }
 
+export interface Inbound {
+  id: string
+  server_id: string
+  tag: string
+  protocol: string
+  transport: string
+  security: string
+  port: number
+  listen: string
+  settings: string
+  stream: string
+  enabled: boolean
+  remark: string
+}
+
+export interface InboundClient {
+  id: string
+  inbound_id: string
+  user_id: string
+  uuid: string
+  email: string
+  enabled: boolean
+}
+
+export interface NodeItem {
+  id: string
+  inbound_id: string
+  name: string
+  region: string
+  tags: string
+  sort: number
+  enabled: boolean
+  inbound: Inbound
+  server_name: string
+  server_address: string
+}
+
+export interface UserItem {
+  id: string
+  username: string
+  nickname: string
+  email: string
+  role: string
+  status: string
+  sub_token: string
+  traffic_limit: number
+  traffic_used: number
+  expire_at: number
+  created_at: number
+}
+
+export interface XrayPreview {
+  rev: string
+  tags: string[]
+  config: unknown
+}
+
+export interface ApplyResult {
+  server_id: string
+  rev: string
+  inbounds: number
+  status: string
+  applied: boolean
+  output?: string
+  error?: string
+}
+
 export interface AuditLog {
   id: string
   ts: number
@@ -115,6 +182,59 @@ export const api = {
     ),
   taskKinds: () => request<{ kinds: string[] }>('/api/admin/tasks/kinds'),
   audit: () => request<{ logs: AuditLog[] }>('/api/admin/audit'),
+
+  // ---- 入站 ----
+  listInbounds: (serverId?: string) =>
+    request<{
+      inbounds: Inbound[]
+      protocols: string[]
+      transports: string[]
+      securities: string[]
+    }>(`/api/admin/inbounds${serverId ? `?server_id=${serverId}` : ''}`),
+  createInbound: (body: Record<string, unknown>) =>
+    request<{ inbound: Inbound; node: unknown }>('/api/admin/inbounds', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deleteInbound: (id: string) =>
+    request<{ ok: boolean }>(`/api/admin/inbounds/${id}`, { method: 'DELETE' }),
+  listClients: (inboundId: string) =>
+    request<{ clients: InboundClient[] }>(`/api/admin/inbounds/${inboundId}/clients`),
+  addClient: (inboundId: string, userId: string, email = '') =>
+    request<{ client: InboundClient }>(`/api/admin/inbounds/${inboundId}/clients`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, email }),
+    }),
+  deleteClient: (id: string) =>
+    request<{ ok: boolean }>(`/api/admin/clients/${id}`, { method: 'DELETE' }),
+
+  // ---- 节点 ----
+  listNodes: () => request<{ nodes: NodeItem[]; total: number }>('/api/admin/nodes'),
+  updateNode: (id: string, body: Record<string, unknown>) =>
+    request<{ node: unknown }>(`/api/admin/nodes/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  // ---- Xray ----
+  xrayPreview: (serverId: string) =>
+    request<XrayPreview>(`/api/admin/servers/${serverId}/xray-preview`),
+  applyXray: (serverId: string) =>
+    request<{ result: ApplyResult }>(`/api/admin/servers/${serverId}/apply`, { method: 'POST' }),
+
+  // ---- 用户 ----
+  listUsers: () => request<{ users: UserItem[]; total: number }>('/api/admin/users'),
+  createUser: (username: string, password: string, nickname = '') =>
+    request<{ user: UserItem }>('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, nickname }),
+    }),
+  deleteUser: (id: string) => request<{ ok: boolean }>(`/api/admin/users/${id}`, { method: 'DELETE' }),
+  rotateSubToken: (id: string) =>
+    request<{ sub_token: string; sub_url: string }>(`/api/admin/users/${id}/sub-token`, {
+      method: 'POST',
+    }),
+  subURL: (token: string) => `${location.origin}/sub/${token}`,
   overview: () =>
     request<{
       servers_total: number
@@ -135,6 +255,11 @@ export function fmtBytes(n: number | undefined): string {
 
 export function fmtPct(n: number | undefined): string {
   return `${(n ?? 0).toFixed(1)}%`
+}
+
+export function fmtDate(ms: number | undefined): string {
+  if (!ms) return '不限'
+  return new Date(ms).toLocaleDateString()
 }
 
 export function fmtDuration(sec: number | undefined): string {

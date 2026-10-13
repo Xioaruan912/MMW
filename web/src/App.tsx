@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { InboundsPage, NodesPage, UsersPage } from './pages'
 import {
   ApiError,
   api,
@@ -10,7 +11,7 @@ import {
   type User,
 } from './api'
 
-type View = 'servers' | 'audit'
+type View = 'servers' | 'inbounds' | 'nodes' | 'users' | 'audit'
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
@@ -142,6 +143,15 @@ function Console({ user, onLogout }: { user: User; onLogout: () => void }) {
           <button className={view === 'servers' ? 'active' : ''} onClick={() => setView('servers')}>
             服务管理
           </button>
+          <button className={view === 'inbounds' ? 'active' : ''} onClick={() => setView('inbounds')}>
+            节点与入站
+          </button>
+          <button className={view === 'nodes' ? 'active' : ''} onClick={() => setView('nodes')}>
+            节点列表
+          </button>
+          <button className={view === 'users' ? 'active' : ''} onClick={() => setView('users')}>
+            用户与订阅
+          </button>
           <button className={view === 'audit' ? 'active' : ''} onClick={() => setView('audit')}>
             审计日志
           </button>
@@ -157,12 +167,12 @@ function Console({ user, onLogout }: { user: User; onLogout: () => void }) {
       </aside>
 
       <main>
-        <header>
-          <h2>{view === 'servers' ? '服务管理' : '审计日志'}</h2>
-          {view === 'servers' && (
+        {view === 'servers' && (
+          <header>
+            <h2>服务管理</h2>
             <button onClick={() => setShowAdd(true)}>添加服务器</button>
-          )}
-        </header>
+          </header>
+        )}
 
         {view === 'servers' && (
           <>
@@ -186,6 +196,9 @@ function Console({ user, onLogout }: { user: User; onLogout: () => void }) {
           </>
         )}
 
+        {view === 'inbounds' && <InboundsPage servers={servers} flash={flash} />}
+        {view === 'nodes' && <NodesPage flash={flash} />}
+        {view === 'users' && <UsersPage flash={flash} />}
         {view === 'audit' && <AuditTable />}
 
         {showAdd && (

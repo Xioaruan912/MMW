@@ -212,3 +212,63 @@ pre.code {
   border-radius: var(--radius);
   box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
 }
+
+/* ---- 新增：面板 / 表格 / 对话框 扩展 ---- */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+button.sm { padding: 4px 10px; font-size: 12px; }
+
+.chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.chip.reality { color: #ffb86b; border-color: #5a3d1f; }
+.chip.tls { color: #6bd3ff; border-color: #1f4a5a; }
+.chip.none { color: var(--muted); }
+
+.kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; margin-bottom: 10px; }
+.kv > span:nth-child(odd) { color: var(--muted); }
+
+.modal.wide { width: 720px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+
+.tabs { display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+.tabs button {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 8px 12px;
+}
+.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+.link-row { display: grid; grid-template-columns: 130px 1fr auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+.link-row input { font-size: 12px; }
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.check-row input { width: auto; }
+
+td.actions, .actions { white-space: nowrap; }
