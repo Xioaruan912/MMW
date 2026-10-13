@@ -15,7 +15,8 @@ run/
 
 # 前端
 web/node_modules/
-web/dist/
+# 前端产物：只忽略 assets，保留 dist/index.html 作为未构建时的占位页
+web/dist/assets/
 web/.vite/
 
 # 密钥与本地配置

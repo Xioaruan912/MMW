@@ -26,6 +26,7 @@ import (
 	"github.com/mmx-project/mmx/internal/logging"
 	"github.com/mmx-project/mmx/internal/storage"
 	"github.com/mmx-project/mmx/internal/version"
+	"github.com/mmx-project/mmx/internal/webui"
 )
 
 func main() {
@@ -106,7 +107,7 @@ func run() error {
 		Hub:            hub,
 		Config:         cfg,
 		AgentBinaryDir: os.Getenv("MMX_AGENT_BINARY_DIR"),
-		WebFS:          nil, // 前端在 P9 通过 embed 注入
+		WebFS:          webui.FS(), // 前端 embed 进二进制；未构建时为占位页
 		Version:        version.Version,
 		StartedAt:      time.Now(),
 	})

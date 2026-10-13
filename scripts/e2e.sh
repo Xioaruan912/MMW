@@ -150,7 +150,21 @@ REJ_CODE="$(curl -s -o "$WORK/rej.json" -w '%{http_code}' -b "$COOKIE" -X POST "
   -d '{"kind":"shell.exec","args":{"cmd":"id"}}')"
 [[ "$REJ_CODE" == "400" ]] && ok "shell.exec 被拒（HTTP 400）" || bad "任意命令未被拒绝（HTTP $REJ_CODE）"
 
-head_ "9. 审计日志"
+head_ "9. 内嵌前端"
+FE_CODE="$(curl -s -o "$WORK/index.html" -w '%{http_code}' "$BASE/")"
+[[ "$FE_CODE" == "200" ]] && ok "GET / 返回 200" || bad "前端首页 HTTP $FE_CODE"
+grep -qi '<div id="root"' "$WORK/index.html" && ok "首页是前端挂载点" || bad "首页不是前端页面"
+SPA_CODE="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/servers")"
+[[ "$SPA_CODE" == "200" ]] && ok "SPA 路由回落正常（/servers → 200）" || bad "SPA 回落失败 HTTP $SPA_CODE"
+ASSET="$(grep -o '/assets/[A-Za-z0-9._-]*\.js' "$WORK/index.html" | head -1)"
+if [[ -n "$ASSET" ]]; then
+  A_CODE="$(curl -s -o /dev/null -w '%{http_code}' "$BASE$ASSET")"
+  [[ "$A_CODE" == "200" ]] && ok "前端资源可加载: $ASSET" || bad "前端资源 HTTP $A_CODE: $ASSET"
+else
+  bad "首页未引用任何 /assets/*.js（前端没构建？）"
+fi
+
+head_ "10. 审计日志"
 curl -s -b "$COOKIE" "$BASE/api/admin/audit" -o "$WORK/audit.json"
 AUDIT_N="$(cat "$WORK/audit.json" | jget total 2>/dev/null || echo 0)"
 if [[ "$AUDIT_N" -ge 3 ]]; then ok "审计记录 $AUDIT_N 条"; else bad "审计记录过少: $AUDIT_N"; fi
