@@ -3,6 +3,7 @@ package agentlink
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -202,16 +203,17 @@ func (h *Hub) PushConfig(serverID string, cfg agentproto.ConfigPayload) error {
 // ---------------------------------------------------------------------------
 
 // DispatchTask 签名并下发一个任务，阻塞等待结果（或超时）。
+//
+// 任务在派发前先落库（pending_tasks），因此：
+//   - 主控重启后可以恢复/超时结算，而不是静默丢失
+//   - Pull（HTTP 降级）通道可以从同一个队列取任务，与 WS 模式能力对齐
+//   - 有完整的执行历史可查
 func (h *Hub) DispatchTask(ctx context.Context, serverID, kind string, args agentproto.RawArgs, actor string) (agentproto.TaskResultPayload, error) {
 	if !agentproto.KnownTask(kind) {
 		return agentproto.TaskResultPayload{}, fmt.Errorf("任务 %q 不在白名单内", kind)
 	}
 	if err := agentproto.ValidateTask(kind, args); err != nil {
 		return agentproto.TaskResultPayload{}, err
-	}
-	c, ok := h.lookup(serverID)
-	if !ok {
-		return agentproto.TaskResultPayload{}, ErrServerOffline
 	}
 	if args == nil {
 		args = agentproto.RawArgs{}
@@ -232,6 +234,31 @@ func (h *Hub) DispatchTask(ctx context.Context, serverID, kind string, args agen
 		return agentproto.TaskResultPayload{}, err
 	}
 
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return agentproto.TaskResultPayload{}, err
+	}
+	rec := storage.PendingTask{
+		ID: task.TaskID, ServerID: serverID, Kind: kind, Args: string(argsJSON),
+		Nonce: nonce, Signature: task.Signature, DeadlineMS: task.DeadlineMS, Actor: actor,
+	}
+	if err := h.store.CreateTask(ctx, rec); err != nil {
+		return agentproto.TaskResultPayload{}, fmt.Errorf("任务落库失败: %w", err)
+	}
+
+	// 无论成功失败都要结算任务记录，避免留下永久的 pending
+	finish := func(status, output, errMsg string) {
+		_ = h.store.FinishTask(context.Background(), task.TaskID, status, output, errMsg)
+	}
+
+	c, online := h.lookup(serverID)
+	if !online {
+		// 服务器离线：任务保留在队列里，等 Agent 用 Pull 通道取走或重连后由 sweeper 超时结算
+		h.store.Audit(ctx, storage.AuditTaskDispatch, actor, serverID,
+			fmt.Sprintf("kind=%s task=%s (服务器离线，已入队)", kind, task.TaskID), "")
+		return agentproto.TaskResultPayload{}, ErrServerOffline
+	}
+
 	ch := make(chan agentproto.TaskResultPayload, 1)
 	h.mu.Lock()
 	h.pending[task.TaskID] = ch
@@ -244,11 +271,14 @@ func (h *Hub) DispatchTask(ctx context.Context, serverID, kind string, args agen
 
 	env, err := agentproto.NewEnvelope(agentproto.TypeTask, task)
 	if err != nil {
+		finish(storage.TaskFailed, "", err.Error())
 		return agentproto.TaskResultPayload{}, err
 	}
 	if !c.trySend(env) {
+		finish(storage.TaskFailed, "", ErrServerOffline.Error())
 		return agentproto.TaskResultPayload{}, ErrServerOffline
 	}
+	_ = h.store.MarkTaskDispatched(ctx, task.TaskID)
 	h.store.Audit(ctx, storage.AuditTaskDispatch, actor, serverID,
 		fmt.Sprintf("kind=%s task=%s", kind, task.TaskID), "")
 
@@ -257,14 +287,28 @@ func (h *Hub) DispatchTask(ctx context.Context, serverID, kind string, args agen
 	case res := <-ch:
 		return res, nil
 	case <-time.After(wait):
+		finish(storage.TaskTimeout, "", "主控侧等待回执超时")
 		return agentproto.TaskResultPayload{}, fmt.Errorf("%w（task=%s kind=%s）", ErrTaskTimeout, task.TaskID, kind)
 	case <-ctx.Done():
+		finish(storage.TaskCancelled, "", "调用方取消")
 		return agentproto.TaskResultPayload{}, ctx.Err()
 	}
 }
 
-// deliverTaskResult 由读循环调用，把结果交给等待者。
+// DeliverResult 供外部（Pull 通道）把任务结果交给可能仍在等待的同步调用方。
+func (h *Hub) DeliverResult(res agentproto.TaskResultPayload) { h.deliverTaskResult(res) }
+
+// deliverTaskResult 由读循环调用，把结果交给等待者并结算任务记录。
 func (h *Hub) deliverTaskResult(res agentproto.TaskResultPayload) {
+	status := storage.TaskFailed
+	switch res.Status {
+	case agentproto.TaskStatusOK:
+		status = storage.TaskOK
+	case agentproto.TaskStatusRejected:
+		status = storage.TaskCancelled
+	}
+	_ = h.store.FinishTask(context.Background(), res.TaskID, status, res.Output, res.Error)
+
 	h.mu.RLock()
 	ch, ok := h.pending[res.TaskID]
 	h.mu.RUnlock()

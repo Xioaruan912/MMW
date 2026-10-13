@@ -3,6 +3,7 @@ package httpapi
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"io/fs"
 	"mime"
@@ -95,6 +96,8 @@ type pullReq struct {
 	Hello     *agentproto.HelloPayload     `json:"hello,omitempty"`
 	Heartbeat *agentproto.HeartbeatPayload `json:"heartbeat,omitempty"`
 	Metrics   *agentproto.MetricsPayload   `json:"metrics,omitempty"`
+	// 上一轮取走的任务的执行结果（Pull 模式下没有反向通道，只能随上报带回来）
+	Results []agentproto.TaskResultPayload `json:"results,omitempty"`
 }
 
 type pullResp struct {
@@ -103,7 +106,15 @@ type pullResp struct {
 	ServerTime int64                     `json:"server_time"`
 }
 
+// pullTaskTTL 是任务在队列里等待 Agent 拉取的最长时间。
+// 超过这个时间仍未取走的任务视为陈旧，不再下发（避免 Agent 长时间离线后
+// 一次性收到大量早已失去意义的指令，例如重启早已不存在进程）。
+const pullTaskTTL = 15 * time.Minute
+
 // handleAgentPull 是 WS 的降级通道：上报 + 取任务，一次往返。
+//
+// 与 WS 模式的**能力对齐**：任务从同一张 pending_tasks 表取，
+// 同样带签名与 nonce，Agent 侧走完全一致的验签与白名单校验。
 func (s *Server) handleAgentPull(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	plain := agentlink.TokenFromRequest(r)
@@ -127,6 +138,23 @@ func (s *Server) handleAgentPull(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.store.MarkServerSeen(ctx, sv.ID, ip, agentVersion, agentproto.Version, "")
 
+	// 1) 先收取上一轮任务的结果
+	for _, res := range req.Results {
+		status := storage.TaskFailed
+		switch res.Status {
+		case agentproto.TaskStatusOK:
+			status = storage.TaskOK
+		case agentproto.TaskStatusRejected:
+			status = storage.TaskCancelled
+		}
+		_ = s.store.FinishTask(ctx, res.TaskID, status, res.Output, res.Error)
+		s.log.Info("任务完成（Pull）", "server", sv.ID, "task", res.TaskID,
+			"status", res.Status, "err", res.Error)
+		// 同时喂给可能仍在等待中的同步调用方（例如管理面板刚发起就断了 WS）
+		s.hub.DeliverResult(res)
+	}
+
+	// 2) 落指标
 	if req.Metrics != nil {
 		m := storage.ServerMetrics{
 			ServerID: sv.ID, TS: req.Metrics.TS,
@@ -145,12 +173,25 @@ func (s *Server) handleAgentPull(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.InsertMetrics(ctx, m)
 	}
 
-	// 当前版本尚未实现任务队列缓存，Pull 模式下任务会返回空。
-	// 后续 P4 会引入 pending_tasks 表，使 Pull 模式与 WS 模式能力对齐。
-	writeJSON(w, http.StatusOK, pullResp{
-		Tasks:      []agentproto.TaskPayload{},
-		ServerTime: time.Now().UnixMilli(),
-	})
+	// 3) 取走待投递任务（已标记为 dispatched，不会重复下发）
+	claimed, err := s.store.ClaimPendingTasks(ctx, sv.ID, 10, pullTaskTTL)
+	if err != nil {
+		mapError(s.log, w, err, "agent pull claim")
+		return
+	}
+	tasks := make([]agentproto.TaskPayload, 0, len(claimed))
+	for _, t := range claimed {
+		var args agentproto.RawArgs
+		if t.Args != "" {
+			_ = json.Unmarshal([]byte(t.Args), &args)
+		}
+		tasks = append(tasks, agentproto.TaskPayload{
+			TaskID: t.ID, Kind: t.Kind, Nonce: t.Nonce, Signature: t.Signature,
+			DeadlineMS: t.DeadlineMS, Args: args,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, pullResp{Tasks: tasks, ServerTime: time.Now().UnixMilli()})
 }
 
 // ---------------------------------------------------------------------------

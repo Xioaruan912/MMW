@@ -345,6 +345,58 @@ grep -q "^vless://" "$WORK/sub-plain.txt" && ok "format=uri 返回明文 URI" ||
 curl -s -o /dev/null -w '%{http_code}' "$BASE/sub/not-a-real-token" > "$WORK/bad.tmp"
 [[ "$(cat "$WORK/bad.tmp")" == "404" ]] && ok "无效订阅凭据返回 404" || bad "无效凭据未拒绝"
 
+head_ "7e. 任务持久化与 Pull 降级通道"
+TASKS_CODE="$(curl -s -o "$WORK/tasks.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/tasks?server_id=$SERVER_ID")"
+TASKS_N="$(cat "$WORK/tasks.json" | jget total 2>/dev/null || echo 0)"
+[[ "$TASKS_CODE" == "200" && "$TASKS_N" -ge 3 ]] \
+  && ok "任务历史已持久化（$TASKS_N 条，含 probe/xray.apply_config/xray.install）" \
+  || bad "任务历史异常 HTTP $TASKS_CODE total=$TASKS_N"
+grep -q '"status":"ok"' "$WORK/tasks.json" && ok "任务记录含成功状态" || bad "任务记录缺少成功状态"
+
+# 取出 Agent 的长期令牌（enroll 后写回了配置文件）
+AGENT_TOKEN="$(awk '/^agent_token:/ {print $2}' "$WORK/agent/config.yaml" | tr -d '"')"
+[[ -n "$AGENT_TOKEN" ]] && ok "已从 Agent 配置读取长期令牌" || bad "未能读取 Agent 令牌"
+
+# 让服务器离线，这样新任务会停留在队列里而不是被 WS 立即消费
+kill "$AGENT_PID" 2>/dev/null || true
+wait "$AGENT_PID" 2>/dev/null || true
+sleep 2
+
+QUEUE_CODE="$(curl -s -o "$WORK/queued.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" -H 'Content-Type: application/json' \
+  -d '{"kind":"probe.collect_now","args":{}}')"
+[[ "$QUEUE_CODE" == "502" ]] && ok "离线服务器下发任务返回 502（任务已入队）" \
+  || bad "离线下发应返回 502，实得 $QUEUE_CODE"
+
+PULL_CODE="$(curl -s -o "$WORK/pull.json" -w '%{http_code}' -X POST "$BASE/api/agent/pull" \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"heartbeat":{"seq":1,"xray_running":false}}')"
+[[ "$PULL_CODE" == "200" ]] && ok "Pull 通道可用（HTTP 200）" || bad "Pull 通道 HTTP $PULL_CODE"
+
+python3 - "$WORK/pull.json" <<'PY' && ok "Pull 成功取回队列中的任务，且带签名与 nonce" || bad "Pull 未取回任务或签名缺失"
+import json, sys
+d = json.load(open(sys.argv[1]))
+tasks = d.get('tasks') or []
+assert tasks, 'Pull 返回的任务列表为空'
+t = tasks[0]
+assert t.get('kind') == 'probe.collect_now', f"任务类型不符: {t.get('kind')}"
+assert t.get('signature'), '任务缺少 Ed25519 签名'
+assert t.get('nonce'), '任务缺少 nonce'
+assert t.get('task_id'), '任务缺少 task_id'
+PY
+
+# 再拉一次应当为空（已标记 dispatched，不会重复下发）
+curl -s -o "$WORK/pull2.json" -X POST "$BASE/api/agent/pull" \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"heartbeat":{"seq":2,"xray_running":false}}'
+PULL2_N="$(cat "$WORK/pull2.json" | jget tasks | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))' 2>/dev/null || echo -1)"
+[[ "$PULL2_N" == "0" ]] && ok "已投递任务不会重复下发（幂等取用）" || bad "任务被重复下发: $PULL2_N"
+
+# 无效令牌必须被拒
+NOAUTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/agent/pull" \
+  -H "Authorization: Bearer not-a-real-token" -H 'Content-Type: application/json' -d '{}')"
+[[ "$NOAUTH_CODE" == "401" ]] && ok "Pull 通道拒绝无效令牌（401）" || bad "Pull 鉴权失效: $NOAUTH_CODE"
+
 head_ "8. 非白名单任务被拒"
 REJ_CODE="$(curl -s -o "$WORK/rej.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" \
   -H 'Content-Type: application/json' \

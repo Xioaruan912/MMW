@@ -280,6 +280,20 @@ func (s *Server) handleTaskKinds(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"kinds": agentproto.TaskKinds()})
 }
 
+// handleListTasks 查询任务历史（含超时与失败记录）。
+//
+// 任务已持久化到 pending_tasks，因此这里能看到完整的下发历史，
+// 而不是只有内存中还在等待的那几个。
+func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	serverID := r.URL.Query().Get("server_id")
+	list, err := s.store.ListTasks(r.Context(), serverID, 100)
+	if err != nil {
+		mapError(s.log, w, err, "list tasks")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": list, "total": len(list)})
+}
+
 // ---------------------------------------------------------------------------
 // 审计与总览
 // ---------------------------------------------------------------------------

@@ -40,6 +40,7 @@ func (s *Sweeper) Run(ctx context.Context) {
 			return
 		case <-tick.C:
 			s.sweepOffline(ctx)
+			s.expireTasks(ctx)
 		case <-prune.C:
 			s.prune(ctx)
 		}
@@ -83,5 +84,22 @@ func (s *Sweeper) prune(ctx context.Context) {
 	}
 	if n, err := st.PruneSessions(ctx); err == nil && n > 0 {
 		s.log.Info("清理过期会话", "rows", n)
+	}
+	if n, err := st.PruneTasks(ctx, 7*24*time.Hour); err == nil && n > 0 {
+		s.log.Info("清理历史任务", "rows", n)
+	}
+}
+
+// expireTasks 把长时间未收到回执的任务结算为超时。
+//
+// 触发场景：Agent 掉线、主控重启、回执丢失。不做这一步就会留下永久的 dispatched 记录。
+func (s *Sweeper) expireTasks(ctx context.Context) {
+	n, err := s.reg.Store().ExpireStaleTasks(ctx)
+	if err != nil {
+		s.log.Warn("任务超时结算失败", "err", err)
+		return
+	}
+	if n > 0 {
+		s.log.Info("已结算超时任务", "rows", n)
 	}
 }

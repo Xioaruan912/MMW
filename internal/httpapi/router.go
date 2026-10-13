@@ -64,6 +64,7 @@ func (s *Server) Routes() http.Handler {
 		pr.Post("/api/admin/servers/{id}/tasks", s.handleDispatchTask)
 
 		pr.Get("/api/admin/tasks/kinds", s.handleTaskKinds)
+		pr.Get("/api/admin/tasks", s.handleListTasks)
 		pr.Get("/api/admin/audit", s.handleListAudit)
 		pr.Get("/api/admin/overview", s.handleOverview)
 

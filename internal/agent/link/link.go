@@ -42,6 +42,8 @@ type Client struct {
 	metrics   time.Duration
 	seq       uint64
 	configRev string
+	clockSkew int64 // 本地时钟相对主控的偏移（毫秒）
+	results   resultQueue
 }
 
 // New 构造 Client。
@@ -64,8 +66,12 @@ func New(cfg agent.Config, cfgPath string, log *slog.Logger) *Client {
 }
 
 // Run 阻塞运行，直到 ctx 被取消。内部自动重连，不向外抛错。
+//
+// 降级策略：WebSocket 连续失败 3 次 → 切到 HTTP Pull 轮询；
+// Pull 连续成功若干轮后自动尝试回到 WebSocket（带宽与延迟都更优）。
 func (c *Client) Run(ctx context.Context) {
 	backoff := c.cfg.ReconnectMin
+	wsFailures := 0
 	for {
 		if ctx.Err() != nil {
 			return
@@ -76,8 +82,23 @@ func (c *Client) Run(ctx context.Context) {
 			return
 		}
 		if err != nil {
-			c.log.Warn("连接中断", "err", err, "session_dur", time.Since(start).Round(time.Second).String())
+			wsFailures++
+			c.log.Warn("连接中断", "err", err, "ws_failures", wsFailures,
+				"session_dur", time.Since(start).Round(time.Second).String())
+		} else {
+			wsFailures = 0
 		}
+
+		if wsFailures >= 3 {
+			c.log.Warn("WebSocket 连续失败，切换到 Pull 降级模式", "failures", wsFailures)
+			if err := c.pullSession(ctx); err != nil {
+				c.log.Warn("Pull 模式退出", "err", err)
+			}
+			wsFailures = 0
+			backoff = c.cfg.ReconnectMin
+			continue
+		}
+
 		// 会话持续时间够长则重置退避，避免抖动时一路涨到上限
 		if time.Since(start) > 60*time.Second {
 			backoff = c.cfg.ReconnectMin
@@ -96,6 +117,9 @@ func (c *Client) Run(ctx context.Context) {
 		}
 	}
 }
+
+// versionString 返回供 hello 携带的 Agent 版本号。
+func versionString() string { return version.Version }
 
 // ---------------------------------------------------------------------------
 // 单次会话
@@ -342,7 +366,16 @@ func (c *Client) applyHelloAck(p agentproto.HelloAckPayload) {
 			c.masterPub = pub
 		}
 	}
+	if p.ServerTime > 0 {
+		// 记录与主控的时钟偏差；用于日志与任务 deadline 判断
+		c.clockSkew = time.Now().UnixMilli() - p.ServerTime
+	}
+	skew := c.clockSkew
 	c.mu.Unlock()
+
+	if skew > 30_000 || skew < -30_000 {
+		c.log.Warn("本机时钟与主控偏差较大，建议校时", "skew_ms", skew)
+	}
 
 	if p.ServerID != "" && p.ServerID != c.cfg.ServerID {
 		c.cfg.ServerID = p.ServerID

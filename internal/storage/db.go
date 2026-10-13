@@ -222,6 +222,29 @@ func (db *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrationV3SQL 是任务持久化。
+const migrationV3SQL = `
+CREATE TABLE IF NOT EXISTS pending_tasks (
+    id            TEXT PRIMARY KEY,
+    server_id     TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    args          TEXT NOT NULL DEFAULT '{}',
+    nonce         TEXT NOT NULL DEFAULT '',
+    signature     TEXT NOT NULL DEFAULT '',
+    deadline_ms   INTEGER NOT NULL DEFAULT 60000,
+    actor         TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'pending',
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL,
+    dispatched_at INTEGER NOT NULL DEFAULT 0,
+    finished_at   INTEGER NOT NULL DEFAULT 0,
+    output        TEXT NOT NULL DEFAULT '',
+    error         TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_server_status ON pending_tasks(server_id, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_created ON pending_tasks(created_at);
+`
+
 // migrationV2 返回入站 / 节点 / 流量与服务端可选字段的迁移。
 // 单独拆出来是为了新版 gofmt 下长 SQL 字面量更易读。
 func init() {
@@ -229,6 +252,11 @@ func init() {
 		Version: 2,
 		Name:    "inbounds_nodes_traffic",
 		SQL:     migrationV2SQL,
+	})
+	migrations = append(migrations, migration{
+		Version: 3,
+		Name:    "pending_tasks",
+		SQL:     migrationV3SQL,
 	})
 }
 
