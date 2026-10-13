@@ -18,7 +18,7 @@ const (
 )
 
 const userCols = `id,username,password_hash,nickname,email,role,status,totp_secret,
-                   sub_token,traffic_limit,traffic_used,expire_at,template_id,created_at,updated_at`
+                   sub_token,traffic_limit,traffic_used,expire_at,template_id,package_id,created_at,updated_at`
 
 func scanUser(sc interface {
 	Scan(...any) error
@@ -26,7 +26,7 @@ func scanUser(sc interface {
 	var u User
 	err := sc.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Nickname, &u.Email,
 		&u.Role, &u.Status, &u.TOTPSecret,
-		&u.SubToken, &u.TrafficLimit, &u.TrafficUsed, &u.ExpireAt, &u.TemplateID,
+		&u.SubToken, &u.TrafficLimit, &u.TrafficUsed, &u.ExpireAt, &u.TemplateID, &u.PackageID,
 		&u.CreatedAt, &u.UpdatedAt)
 	return u, err
 }
@@ -50,10 +50,10 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash, nickname
 		CreatedAt: now, UpdatedAt: now,
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO users(`+userCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO users(`+userCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		u.ID, u.Username, u.PasswordHash, u.Nickname, u.Email, u.Role, u.Status,
 		u.TOTPSecret, u.SubToken, u.TrafficLimit, u.TrafficUsed, u.ExpireAt, u.TemplateID,
-		u.CreatedAt, u.UpdatedAt)
+		u.PackageID, u.CreatedAt, u.UpdatedAt)
 	if err != nil {
 		return User{}, err
 	}
@@ -188,9 +188,10 @@ func (s *Store) GetUserBySubToken(ctx context.Context, token string) (User, erro
 func (s *Store) UpdateUser(ctx context.Context, u User) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE users SET nickname=?, email=?, role=?, status=?,
-             traffic_limit=?, traffic_used=?, expire_at=?, template_id=?, updated_at=? WHERE id=?`,
+             traffic_limit=?, traffic_used=?, expire_at=?, template_id=?, package_id=?,
+             updated_at=? WHERE id=?`,
 		u.Nickname, u.Email, u.Role, u.Status,
-		u.TrafficLimit, u.TrafficUsed, u.ExpireAt, u.TemplateID, nowMS(), u.ID)
+		u.TrafficLimit, u.TrafficUsed, u.ExpireAt, u.TemplateID, u.PackageID, nowMS(), u.ID)
 	if err != nil {
 		return err
 	}

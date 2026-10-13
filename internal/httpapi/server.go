@@ -8,6 +8,7 @@ import (
 	"github.com/mmx-project/mmx/internal/agentlink"
 	"github.com/mmx-project/mmx/internal/backup"
 	"github.com/mmx-project/mmx/internal/config"
+	"github.com/mmx-project/mmx/internal/mcp"
 	"github.com/mmx-project/mmx/internal/notify"
 	"github.com/mmx-project/mmx/internal/probe"
 	"github.com/mmx-project/mmx/internal/storage"
@@ -24,6 +25,7 @@ type Options struct {
 	Probe          *probe.Service
 	Notifier       *notify.Notifier
 	Backup         *backup.Manager
+	MCP            *mcp.Server
 	Config         config.MasterConfig
 	AgentBinaryDir string // Agent 二进制库存目录；为空则 /api/remote/agent/* 返回 404
 	WebFS          fs.FS  // 内嵌前端（可选）
@@ -41,6 +43,7 @@ type Server struct {
 	probe          *probe.Service
 	notifier       *notify.Notifier
 	backup         *backup.Manager
+	mcp            *mcp.Server
 	cfg            config.MasterConfig
 	agentBinaryDir string
 	webFS          fs.FS
@@ -63,6 +66,7 @@ func New(o Options) *Server {
 		probe:          o.Probe,
 		notifier:       o.Notifier,
 		backup:         o.Backup,
+		mcp:            o.MCP,
 		cfg:            o.Config,
 		agentBinaryDir: o.AgentBinaryDir,
 		webFS:          o.WebFS,

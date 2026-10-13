@@ -1,41 +1,39 @@
-feat(P7): 订阅模板引擎 + 规则集 + 订阅文件
+feat(P8): 套餐 + 兑换码 + 内建 MCP 服务端
 
-模板引擎（internal/ruleengine）
-- 模板就是一份**可直接粘贴进 Clash 使用**的配置，只在节点位置留两个占位符：
-  {{PROXIES}} 与 {{PROXY_NAMES}}
-- 不用 text/template：配置里大量出现 {{ }}、$、反引号，通用模板引擎容易与之冲突，
-  且报错信息对运维不友好
-- **缩进感知替换**：占位符的缩进跟随它所在列。
-  这是本轮最关键的一处 —— 占位符既可能出现在顶层（proxies:），
-  也可能在嵌套层（proxy-groups[].proxies:），把缩进写死在渲染器里必然在某一层被打破。
-  第一版内置模板自己就踩了这个坑（占位符写在列 0，同级项在列 6）。
-- 空节点列表仍产出 `proxies: []` 而不是 null 或坏 YAML
-- 校验三层：名称/内容非空 -> 必须含节点占位符（否则渲染出空配置，
-  用户在客户端才发现"连不上"）-> YAML 语法（用与真实渲染完全相同的替换逻辑做探针）
+套餐（迁移 v9）
+- packages 表：流量上限 / 时长 / 价格（以分为单位避免浮点误差）/ 节点与服务器上限 / 排序
+- ApplyPackage 的续费语义单独说清楚（最容易出错的地方）：
+  * 已有未过期的到期时间默认**顺延**，ExtendFromNow=true 才从当前时间起算
+  * ResetTraffic 时才清零已用流量
+  * DurationDays=0 表示不过期（expire_at=0）
 
-内置模板
-- minimal / simple / full 三份，启动时写入数据库（已存在则跳过）
-- 每份都是完整可用的 Clash 配置，含 dns / proxy-groups / rules
+兑换码
+- redeem_codes 表：支持批量生成、限定使用次数、有效期、绑定套餐或只给流量/时长
+- Redeem 在**同一事务内**「检查 + 自增」，否则并发兑换会把同一张码用超
+- 兑换码去掉易混淆字符（0/O/1/I/L）并按 4-4-4-4 分组，便于口述与抄写
+- 失败统一返回"无效或已用尽"，不区分"不存在"与"用尽"，避免被枚举
 
-数据层（迁移 v8）
-- rule_templates / rule_providers / subscribe_files 三张表
-- users 增加 template_id（用户可绑定自己的模板）
-- 内置模板不可删除（只能复制后改）
-
-接口
-- GET/POST/PATCH/DELETE /api/admin/templates（支持 copy_from 从内置复制）
-- GET /api/admin/templates/{id}/preview（无节点时用占位节点，保证结构可验证）
-- GET/POST/DELETE /api/admin/rule-providers
-- GET/POST/DELETE /api/admin/subscribe-files（列表接口不返回正文，避免响应过大）
-- PUT /api/admin/users/{id}/template
-
-订阅口
-- 绑定了模板的 Clash 系订阅走模板渲染；模板被删则**回落内置渲染**而不是 500
-- URI / base64 / sing-box 没有"模板"概念，仍走内置渲染器
+MCP 服务端（internal/mcp）
+- streamable-HTTP，POST /mcp 处理 JSON-RPC 2.0
+- 方法：initialize / tools/list / tools/call / ping / notifications
+- 11 个工具：list_servers、create_server、list_nodes、create_inbound、
+  apply_xray_config、list_users、create_user、get_traffic、
+  list_announcements、dispatch_task、get_overview
+- **权限与账号完全一致**：AdminOnly 工具对普通用户既不出现在 tools/list，
+  调用时也返回 isError；鉴权复用主控的接口令牌
+- 工具内部错误按规范表达为 isError 结果而不是 JSON-RPC 错误 ——
+  这样 AI Agent 能看到错误内容并自行调整，而不是整轮对话失败
+- GET /mcp 明确 405（未实现 SSE）而不是 404，客户端据此能区分
+  "服务在但不支持该能力" 与 "地址写错了"
+- create_inbound 把传输/安全层的嵌套参数完整暴露：
+  少一个字段会在生成 Xray 配置时才报错，那时 AI 已经走远了好几轮
 
 测试
-- ruleengine 单测 9 组：三份内置模板全部可渲染、占位符缺失/空字段/坏 YAML 三种拒绝、
-  同行占位符拒绝、**缩进跟随**（嵌套层与顶层两个方向）、空节点列表语义正确
-- e2e 新增 16 项（148/148 通过）
-- 顺带修正 e2e 两处自身问题：把 JSON 字符串当 grep 的文件参数、
-  订阅格式拒绝用例的期望码应与实现一致（400 而非 500）
+- storage 单测 10 组：套餐配额/顺延/从当前起算/零时长、
+  负值拒绝、兑换码单次与多次使用、过期、未知码、
+  套餐覆盖配额、兑换码字符集
+- mcp 单测 15 组：协议版本回选与回落、工具列表权限隔离、
+  越权调用、未知工具/方法、非法 JSON、通知无响应、
+  工具实际落库（create_user / create_inbound）、
+  REALITY+WS 组合拒绝、非白名单任务拒绝
+- e2e 新增 21 项（169/169 通过）

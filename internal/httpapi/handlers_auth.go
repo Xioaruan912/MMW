@@ -222,6 +222,8 @@ func publicUser(u storage.User) map[string]any {
 		"role":          u.Role,
 		"status":        u.Status,
 		"sub_token":     u.SubToken,
+		"template_id":   u.TemplateID,
+		"package_id":    u.PackageID,
 		"traffic_limit": u.TrafficLimit,
 		"traffic_used":  u.TrafficUsed,
 		"expire_at":     u.ExpireAt,

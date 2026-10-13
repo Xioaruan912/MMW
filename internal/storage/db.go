@@ -222,6 +222,40 @@ func (db *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrationV9SQL 是套餐与兑换码。
+const migrationV9SQL = `
+CREATE TABLE IF NOT EXISTS packages (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL UNIQUE,
+    description   TEXT NOT NULL DEFAULT '',
+    traffic_limit INTEGER NOT NULL DEFAULT 0,   -- 字节，0 = 不限
+    duration_days INTEGER NOT NULL DEFAULT 0,   -- 0 = 不过期
+    price_cents   INTEGER NOT NULL DEFAULT 0,
+    currency      TEXT NOT NULL DEFAULT 'CNY',
+    max_nodes     INTEGER NOT NULL DEFAULT 0,
+    max_servers   INTEGER NOT NULL DEFAULT 0,
+    sort          INTEGER NOT NULL DEFAULT 0,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS redeem_codes (
+    id            TEXT PRIMARY KEY,
+    code          TEXT NOT NULL UNIQUE,
+    package_id    TEXT NOT NULL DEFAULT '',
+    traffic_bytes INTEGER NOT NULL DEFAULT 0,
+    duration_days INTEGER NOT NULL DEFAULT 0,
+    max_uses      INTEGER NOT NULL DEFAULT 1,
+    used_count    INTEGER NOT NULL DEFAULT 0,
+    expires_at    INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_redeem_code ON redeem_codes(code);
+
+ALTER TABLE users ADD COLUMN package_id TEXT NOT NULL DEFAULT '';
+`
+
 // migrationV8SQL 是订阅模板 / 规则集 / 订阅文件。
 const migrationV8SQL = `
 CREATE TABLE IF NOT EXISTS rule_templates (
@@ -391,6 +425,11 @@ func init() {
 		Version: 8,
 		Name:    "rule_templates_providers_subscribe_files",
 		SQL:     migrationV8SQL,
+	})
+	migrations = append(migrations, migration{
+		Version: 9,
+		Name:    "packages_and_redeem_codes",
+		SQL:     migrationV9SQL,
 	})
 }
 

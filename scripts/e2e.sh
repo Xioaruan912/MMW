@@ -624,6 +624,150 @@ SF_LIST="$(curl -s -b "$COOKIE" "$BASE/api/admin/subscribe-files")"
 echo "$SF_LIST" | grep -q 'proxies' && bad "订阅文件列表不应携带正文" || ok "订阅文件列表不携带正文"
 curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X DELETE "$BASE/api/admin/subscribe-files/$SF_ID"
 
+head_ "7d6. 套餐 / 兑换码 / MCP"
+PKG_CODE="$(curl -s -o "$WORK/pkg.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/packages" -H 'Content-Type: application/json' \
+  -d '{"name":"e2e-月卡","description":"端到端测试套餐","traffic_limit":107374182400,"duration_days":30,"price_cents":1000}')"
+PKG_ID="$(cat "$WORK/pkg.json" | jget package.id 2>/dev/null || echo '')"
+[[ "$PKG_CODE" == "201" && -n "$PKG_ID" ]] && ok "套餐已创建" || bad "创建套餐失败 HTTP $PKG_CODE: $(head -c 200 "$WORK/pkg.json")"
+
+DUP_PKG="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/packages" -H 'Content-Type: application/json' -d '{"name":"e2e-月卡"}')"
+[[ "$DUP_PKG" == "409" ]] && ok "重名套餐被拒（409）" || bad "重名未校验: $DUP_PKG"
+
+# 绑定套餐：应派生流量上限与到期时间
+APPLY_CODE="$(curl -s -o "$WORK/pkg-apply.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/users/$USER_ID/package" -H 'Content-Type: application/json' \
+  -d "{\"package_id\":\"$PKG_ID\",\"reset_traffic\":true}")"
+[[ "$APPLY_CODE" == "200" ]] && ok "套餐已绑定到用户" || bad "绑定套餐失败 HTTP $APPLY_CODE: $(head -c 200 "$WORK/pkg-apply.json")"
+python3 - "$WORK/pkg-apply.json" <<'PY' && ok "套餐派生出流量上限与到期时间" || bad "套餐派生字段异常"
+import json, sys, time
+u = json.load(open(sys.argv[1]))['user']
+assert u['package_id'], u
+assert u['traffic_limit'] == 107374182400, u
+assert u['traffic_used'] == 0, u
+assert u['expire_at'] > (time.time() + 29*86400) * 1000, u
+PY
+
+# ---- 兑换码 ----
+RC_CODE="$(curl -s -o "$WORK/rc.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/redeem-codes" -H 'Content-Type: application/json' \
+  -d '{"traffic_bytes":1073741824,"duration_days":7,"max_uses":1,"count":2}')"
+RC_N="$(grep -o '"code":"' "$WORK/rc.json" | wc -l | tr -d ' ')"
+[[ "$RC_CODE" == "201" && "$RC_N" == "2" ]] && ok "批量生成 2 张兑换码" || bad "生成兑换码失败 HTTP $RC_CODE n=$RC_N"
+RC_1="$(cat "$WORK/rc.json" | jget 'codes.0.code' 2>/dev/null || echo '')"
+[[ "$RC_1" == *-*-*-* ]] && ok "兑换码格式可读（4-4-4-4 分组）" || bad "兑换码格式异常: $RC_1"
+
+# 空权益的兑换码应被拒
+EMPTY_RC="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/redeem-codes" -H 'Content-Type: application/json' -d '{"max_uses":1}')"
+[[ "$EMPTY_RC" == "400" ]] && ok "无任何权益的兑换码被拒（400）" || bad "空权益未校验: $EMPTY_RC"
+
+# 用双因子测试账号自助兑换（它没有被 IP 锁定影响）
+RDM_CODE="$(curl -s -o "$WORK/redeem.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/me/redeem" -H 'Content-Type: application/json' -d "{\"code\":\"$RC_1\"}")"
+[[ "$RDM_CODE" == "200" ]] && ok "用户自助兑换成功" || bad "兑换失败 HTTP $RDM_CODE: $(head -c 200 "$WORK/redeem.json")"
+
+# 同一张码再用必须失败
+RDM2="$(curl -s -o "$WORK/redeem2.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/me/redeem" -H 'Content-Type: application/json' -d "{\"code\":\"$RC_1\"}")"
+[[ "$RDM2" == "400" ]] && ok "已用尽的兑换码被拒（400）" || bad "兑换码被重复使用: $RDM2"
+
+BAD_RDM="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/me/redeem" -H 'Content-Type: application/json' -d '{"code":"AAAA-BBBB-CCCC-DDDD"}')"
+[[ "$BAD_RDM" == "400" ]] && ok "不存在的兑换码被拒（400）" || bad "未知兑换码未拒: $BAD_RDM"
+
+curl -s -o "$WORK/mypkg.json" -b "$COOKIE" "$BASE/api/me/package"
+python3 - "$WORK/mypkg.json" <<'PY' && ok "个人套餐页可查配额" || bad "个人套餐页异常"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert 'quota' in d, d
+assert d['quota']['traffic_limit'] >= 1073741824, d
+PY
+
+# ---- MCP ----
+# 为 MCP 单独签发一个接口令牌（管理员账号 → 可调用管理类工具）
+curl -s -o "$WORK/atk2.json" -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/me/tokens" -H 'Content-Type: application/json' -d '{"name":"mcp-e2e"}'
+MCP_TOKEN="$(cat "$WORK/atk2.json" | jget token 2>/dev/null || echo '')"
+MCP_AUTH="Authorization: Bearer $MCP_TOKEN"
+[[ -n "$MCP_TOKEN" ]] && ok "已签发 MCP 用的接口令牌" || bad "签发 MCP 令牌失败"
+
+# initialize
+curl -s -o "$WORK/mcp-init.json" -H "$MCP_AUTH" -H 'Content-Type: application/json' \
+  -X POST "$BASE/mcp" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
+python3 - "$WORK/mcp-init.json" <<'PY' && ok "MCP initialize 正常（协议版本与服务信息齐备）" || bad "MCP initialize 异常"
+import json, sys
+d = json.load(open(sys.argv[1]))
+r = d['result']
+assert r['protocolVersion'], r
+assert 'tools' in r['capabilities'], r
+assert r['serverInfo']['name'] == 'mmx-master', r
+PY
+
+# 管理员令牌应看到管理类工具
+curl -s -o "$WORK/mcp-tools-admin.json" -H "$MCP_AUTH" -X POST "$BASE/mcp" \
+  -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+python3 - "$WORK/mcp-tools-admin.json" <<'PY' && ok "管理员令牌可见管理类工具" || bad "管理员工具列表异常"
+import json, sys
+tools = json.load(open(sys.argv[1]))['result']['tools']
+names = {t['name'] for t in tools}
+assert 'create_user' in names, names
+assert 'list_servers' in names, names
+for t in tools:
+    assert t.get('inputSchema'), t
+    assert t.get('description'), t
+PY
+
+# 普通用户令牌：不应看到管理员工具，调用时也必须被拒
+MCP_USER="e2e-mcp-user"
+MCP_UPASS="McpUser@12345"
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/users" \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$MCP_USER\",\"password\":\"$MCP_UPASS\",\"nickname\":\"MCP 权限测试\"}"
+UJAR="$WORK/mcpuser.jar"
+curl -s -o /dev/null -c "$UJAR" -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$MCP_USER\",\"password\":\"$MCP_UPASS\"}"
+UCSRF="$(awk '/mmx_csrf/ {print $7}' "$UJAR" | tail -1)"
+curl -s -o "$WORK/atk3.json" -b "$UJAR" -H "X-CSRF-Token: $UCSRF" \
+  -X POST "$BASE/api/me/tokens" -H 'Content-Type: application/json' -d '{"name":"mcp-user"}'
+MCP_UTOKEN="$(cat "$WORK/atk3.json" | jget token 2>/dev/null || echo '')"
+[[ -n "$MCP_UTOKEN" ]] && ok "已签发普通用户的 MCP 令牌" || bad "签发普通用户令牌失败"
+
+curl -s -o "$WORK/mcp-tools-user.json" -H "Authorization: Bearer $MCP_UTOKEN" -X POST "$BASE/mcp" \
+  -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":3,"method":"tools/list"}'
+python3 - "$WORK/mcp-tools-user.json" <<'PY' && ok "普通用户令牌看不到管理员工具" || bad "权限隔离失效"
+import json, sys
+tools = json.load(open(sys.argv[1]))['result']['tools']
+names = {t['name'] for t in tools}
+assert 'create_user' not in names, names
+assert 'list_servers' in names, names
+PY
+
+# tools/call：越权应返回 isError
+curl -s -o "$WORK/mcp-admin-call.json" -H "Authorization: Bearer $MCP_UTOKEN" -X POST "$BASE/mcp" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"create_user","arguments":{"username":"x","password":"1234567890"}}}'
+grep -q '"isError":true' "$WORK/mcp-admin-call.json" && ok "普通用户调用管理员工具返回 isError" || bad "越权未被拦截"
+
+# tools/call：正常工具
+curl -s -o "$WORK/mcp-overview.json" -H "$MCP_AUTH" -X POST "$BASE/mcp" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_overview"}}'
+grep -q 'servers_total' "$WORK/mcp-overview.json" && ok "MCP get_overview 返回数据" || bad "MCP 工具调用失败: $(head -c 200 "$WORK/mcp-overview.json")"
+
+# 非白名单任务经 MCP 也必须被拒
+curl -s -o "$WORK/mcp-badtask.json" -H "$MCP_AUTH" -X POST "$BASE/mcp" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"dispatch_task","arguments":{"server_id":"x","kind":"shell.exec"}}}'
+grep -q '白名单' "$WORK/mcp-badtask.json" && ok "MCP 侧同样拦截非白名单任务" || bad "MCP 未拦截任意命令任务"
+
+# GET /mcp 应明确 405 而不是 404（客户端据此判断服务存在但不支持 SSE）
+MCP_GET="$(curl -s -o /dev/null -w '%{http_code}' -H "$MCP_AUTH" "$BASE/mcp")"
+[[ "$MCP_GET" == "405" ]] && ok "GET /mcp 明确返回 405（未实现 SSE）" || bad "GET /mcp 返回 $MCP_GET"
+
+# 无令牌必须 401
+MCP_NOAUTH="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/mcp" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}')"
+[[ "$MCP_NOAUTH" == "401" ]] && ok "MCP 无令牌被拒（401）" || bad "MCP 未鉴权: $MCP_NOAUTH"
+
 head_ "7e. 任务持久化与 Pull 降级通道"
 TASKS_CODE="$(curl -s -o "$WORK/tasks.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/tasks?server_id=$SERVER_ID")"
 TASKS_N="$(cat "$WORK/tasks.json" | jget total 2>/dev/null || echo 0)"

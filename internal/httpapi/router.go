@@ -50,6 +50,14 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/setup/init", s.handleSetupInit)
 	r.Post("/api/login", s.handleLogin)
 
+	// ---- MCP（需要登录或接口令牌）----
+	r.Group(func(pr chi.Router) {
+		pr.Use(s.mwRequireAuth)
+		pr.Post("/mcp", s.handleMCP)
+		pr.Get("/mcp", s.handleMCP)
+		pr.Delete("/mcp", s.handleMCP)
+	})
+
 	// ---- 需要登录 ----
 	r.Group(func(pr chi.Router) {
 		pr.Use(s.mwRequireAuth, s.mwCSRF)
@@ -63,6 +71,8 @@ func (s *Server) Routes() http.Handler {
 		pr.Post("/api/me/totp/disable", s.handleTOTPDisable)
 		pr.Get("/api/me/traffic", s.handleMyTraffic)
 		pr.Get("/api/me/announcements", s.handleMyAnnouncements)
+		pr.Get("/api/me/package", s.handleMyPackage)
+		pr.Post("/api/me/redeem", s.handleMyRedeem)
 		pr.Get("/api/me/tokens", s.handleListAPITokens)
 		pr.Post("/api/me/tokens", s.handleCreateAPIToken)
 		pr.Delete("/api/me/tokens/{id}", s.handleRevokeAPIToken)
@@ -147,6 +157,18 @@ func (s *Server) Routes() http.Handler {
 		pr.Post("/api/admin/subscribe-files", s.handleCreateSubscribeFile)
 		pr.Delete("/api/admin/subscribe-files/{id}", s.handleDeleteSubscribeFile)
 		pr.Put("/api/admin/users/{id}/template", s.handleSetUserTemplate)
+
+		// ---- 套餐 ----
+		pr.Get("/api/admin/packages", s.handleListPackages)
+		pr.Post("/api/admin/packages", s.handleCreatePackage)
+		pr.Patch("/api/admin/packages/{id}", s.handleUpdatePackage)
+		pr.Delete("/api/admin/packages/{id}", s.handleDeletePackage)
+		pr.Post("/api/admin/users/{id}/package", s.handleApplyPackage)
+
+		// ---- 兑换码 ----
+		pr.Get("/api/admin/redeem-codes", s.handleListRedeemCodes)
+		pr.Post("/api/admin/redeem-codes", s.handleCreateRedeemCode)
+		pr.Delete("/api/admin/redeem-codes/{id}", s.handleDeleteRedeemCode)
 
 		// ---- 备份 / 恢复 ----
 		pr.Get("/api/admin/backup/download", s.handleBackupDownload)

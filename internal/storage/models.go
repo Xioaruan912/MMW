@@ -40,8 +40,10 @@ type User struct {
 	ExpireAt     int64 `json:"expire_at"`
 	// TemplateID 是该用户订阅所用的模板（空表示用默认）
 	TemplateID string `json:"template_id"`
-	CreatedAt  int64  `json:"created_at"`
-	UpdatedAt  int64  `json:"updated_at"`
+	// PackageID 是当前套餐（空表示未绑定）
+	PackageID string `json:"package_id"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 // Server 是一台受管服务器。

@@ -25,6 +25,7 @@ import (
 	"github.com/mmx-project/mmx/internal/config"
 	"github.com/mmx-project/mmx/internal/httpapi"
 	"github.com/mmx-project/mmx/internal/logging"
+	"github.com/mmx-project/mmx/internal/mcp"
 	"github.com/mmx-project/mmx/internal/notify"
 	"github.com/mmx-project/mmx/internal/probe"
 	"github.com/mmx-project/mmx/internal/ruleengine"
@@ -136,6 +137,13 @@ func run() error {
 		})
 	}
 
+	mcpSrv := mcp.New(log, mcp.Tools(mcp.Deps{
+		Store:  store,
+		Hub:    hub,
+		Xray:   xrayctl.NewApplier(store, hub, xrayctl.DefaultOptions()),
+		Online: hub.IsOnline,
+	}))
+
 	api := httpapi.New(httpapi.Options{
 		Log:            log,
 		Store:          store,
@@ -145,6 +153,7 @@ func run() error {
 		Probe:          probeSvc,
 		Notifier:       notifier,
 		Backup:         backupMgr,
+		MCP:            mcpSrv,
 		Config:         cfg,
 		AgentBinaryDir: os.Getenv("MMX_AGENT_BINARY_DIR"),
 		WebFS:          webui.FS(), // 前端 embed 进二进制；未构建时为占位页
