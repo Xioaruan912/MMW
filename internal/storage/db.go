@@ -222,6 +222,23 @@ func (db *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrationV11SQL 是节点探测结果。
+const migrationV11SQL = `
+CREATE TABLE IF NOT EXISTS node_latency (
+    node_id      TEXT NOT NULL,
+    ts           INTEGER NOT NULL,
+    server_id    TEXT NOT NULL,
+    method       TEXT NOT NULL DEFAULT 'tcp',   -- tcp | speedtest
+    alive        INTEGER NOT NULL DEFAULT 0,
+    latency_ms   INTEGER NOT NULL DEFAULT 0,
+    download_bps INTEGER NOT NULL DEFAULT 0,
+    upload_bps   INTEGER NOT NULL DEFAULT 0,
+    error        TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (node_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_node_latency_server ON node_latency(server_id, ts);
+`
+
 // migrationV10SQL 是出站与路由规则。
 const migrationV10SQL = `
 CREATE TABLE IF NOT EXISTS outbounds (
@@ -470,6 +487,11 @@ func init() {
 		Version: 10,
 		Name:    "outbounds_and_routing_rules",
 		SQL:     migrationV10SQL,
+	})
+	migrations = append(migrations, migration{
+		Version: 11,
+		Name:    "node_latency",
+		SQL:     migrationV11SQL,
 	})
 }
 

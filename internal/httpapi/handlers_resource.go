@@ -224,12 +224,21 @@ func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
-	views, err := s.store.ListNodeViews(r.Context(), r.URL.Query().Get("server_id"))
+	serverID := r.URL.Query().Get("server_id")
+	views, err := s.store.ListNodeViews(r.Context(), serverID)
 	if err != nil {
 		mapError(s.log, w, err, "list nodes")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"nodes": views, "total": len(views)})
+	// 附带最新探测结果：面板要显示延迟，前端不该为每个节点各发一次请求
+	latency, err := s.store.LatestNodeLatency(r.Context(), serverID)
+	if err != nil {
+		s.log.Warn("读取节点延迟失败", "err", err)
+		latency = map[string]storage.NodeLatency{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes": views, "total": len(views), "latency": latency,
+	})
 }
 
 type updateNodeReq struct {

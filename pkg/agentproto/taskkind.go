@@ -100,6 +100,8 @@ const (
 	TaskACMESDeployCert = "acme.deploy_cert"
 	TaskProbeCollectNow = "probe.collect_now"
 	TaskXrayQueryStats  = "xray.query_stats"
+	TaskProbeTCPPing    = "probe.tcp_ping"
+	TaskSpeedtestRun    = "speedtest.run"
 )
 
 // taskSpec 描述一个任务的参数约束。
@@ -125,6 +127,8 @@ var taskSpecs = map[string]taskSpec{
 	TaskACMESDeployCert:  {Required: []string{"domain", "cert_pem", "key_pem"}, Timeout: 60 * time.Second},
 	TaskProbeCollectNow:  {Timeout: 20 * time.Second},
 	TaskXrayQueryStats:   {Timeout: 30 * time.Second},
+	TaskProbeTCPPing:     {Required: []string{"targets"}, Timeout: 60 * time.Second},
+	TaskSpeedtestRun:     {Required: []string{"target"}, Timeout: 3 * time.Minute},
 }
 
 // KnownTask 判断任务类型是否在白名单内。

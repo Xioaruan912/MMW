@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/mmx-project/mmx/internal/agent"
 	"github.com/mmx-project/mmx/internal/agent/collect"
+	"github.com/mmx-project/mmx/internal/agent/probe"
 	"github.com/mmx-project/mmx/internal/agent/xray"
 	"github.com/mmx-project/mmx/internal/version"
 	"github.com/mmx-project/mmx/pkg/agentproto"
@@ -512,6 +513,51 @@ func (c *Client) runTask(task agentproto.TaskPayload) (string, agentproto.RawArg
 		return "统计已拉取（" + fmt.Sprintf("%d 字节", len(raw)) + "）",
 			agentproto.RawArgs{"raw": raw}, nil
 
+	case agentproto.TaskProbeTCPPing:
+		targets, err := parseTargets(task.Args)
+		if err != nil {
+			return "", nil, err
+		}
+		results := probe.TCPPing(context.Background(), targets, probe.Options{
+			Timeout:     time.Duration(task.Args.GetInt("timeout_ms")) * time.Millisecond,
+			Concurrency: int(task.Args.GetInt("concurrency")),
+			Samples:     int(task.Args.GetInt("samples")),
+		})
+		alive := 0
+		for _, r := range results {
+			if r.Alive {
+				alive++
+			}
+		}
+		return fmt.Sprintf("已探测 %d 个目标，%d 个可达", len(results), alive),
+			agentproto.RawArgs{"results": results}, nil
+
+	case agentproto.TaskSpeedtestRun:
+		tg := task.Args.GetMap("target")
+		target := probe.Target{
+			Tag:  argStr(tg, "tag"),
+			Host: argStr(tg, "host"),
+			Port: int(argNum(tg, "port")),
+		}
+		res, err := probe.RunSpeedtest(context.Background(), probe.SpeedtestOptions{
+			BinPath:     task.Args.GetString("bin_path"),
+			ConfigPath:  task.Args.GetString("config_path"),
+			Target:      target,
+			DownloadURL: task.Args.GetString("download_url"),
+			SHA256:      task.Args.GetString("sha256"),
+		})
+		if err != nil {
+			return res.Raw, agentproto.RawArgs{
+				"alive": res.Alive, "error": res.Error,
+			}, err
+		}
+		return fmt.Sprintf("测速完成：延迟 %dms / 下行 %d B/s", res.LatencyMS, res.DownloadBPS),
+			agentproto.RawArgs{
+				"alive": res.Alive, "latency_ms": res.LatencyMS,
+				"download_bps": res.DownloadBPS, "upload_bps": res.UploadBPS,
+				"raw": res.Raw,
+			}, nil
+
 	case agentproto.TaskProbeCollectNow:
 		m, err := c.sampler.Collect()
 		if err != nil {
@@ -568,3 +614,56 @@ var (
 	_ = ed25519.PublicKeySize
 	_ = sync.Once{}
 )
+
+// parseTargets 从任务参数里解析探测目标列表。
+func parseTargets(args agentproto.RawArgs) ([]probe.Target, error) {
+	raw, ok := args["targets"]
+	if !ok {
+		return nil, errors.New("缺少 targets")
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, errors.New("targets 必须是数组")
+	}
+	out := make([]probe.Target, 0, len(list))
+	for i, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("targets[%d] 不是对象", i)
+		}
+		t := probe.Target{
+			Tag:  argStr(m, "tag"),
+			Host: argStr(m, "host"),
+			Port: int(argNum(m, "port")),
+		}
+		if t.Host == "" || t.Port <= 0 || t.Port > 65535 {
+			return nil, fmt.Errorf("targets[%d] 的 host/port 非法", i)
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// argStr / argNum 是任务参数里读嵌套字段的小工具。
+func argStr(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	s, _ := m[key].(string)
+	return s
+}
+
+func argNum(m map[string]any, key string) int64 {
+	if m == nil {
+		return 0
+	}
+	switch v := m[key].(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	}
+	return 0
+}

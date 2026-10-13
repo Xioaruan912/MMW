@@ -122,6 +122,12 @@ func (s *Server) Routes() http.Handler {
 		pr.Patch("/api/admin/routing-rules/{id}", s.handleUpdateRoutingRule)
 		pr.Delete("/api/admin/routing-rules/{id}", s.handleDeleteRoutingRule)
 
+		// ---- 节点探测 ----
+		pr.Get("/api/admin/nodes/latency", s.handleNodeLatency)
+		pr.Get("/api/admin/nodes/{id}/latency", s.handleNodeLatencySeries)
+		pr.Post("/api/admin/servers/{id}/probe", s.handleTriggerProbe)
+		pr.Post("/api/admin/probe/all", s.handleTriggerProbeAll)
+
 		// ---- Xray 配置 ----
 		pr.Post("/api/admin/servers/{id}/apply", s.handleApplyXray)
 		pr.Get("/api/admin/servers/{id}/xray-preview", s.handleXrayPreview)

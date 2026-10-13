@@ -28,6 +28,7 @@ import (
 	"github.com/mmx-project/mmx/internal/mcp"
 	"github.com/mmx-project/mmx/internal/notify"
 	"github.com/mmx-project/mmx/internal/probe"
+	"github.com/mmx-project/mmx/internal/prober"
 	"github.com/mmx-project/mmx/internal/ruleengine"
 	"github.com/mmx-project/mmx/internal/storage"
 	"github.com/mmx-project/mmx/internal/traffic"
@@ -137,6 +138,9 @@ func run() error {
 		})
 	}
 
+	nodeProber := prober.New(store, hub, log, 5*time.Minute)
+	go nodeProber.Run(ctx)
+
 	mcpSrv := mcp.New(log, mcp.Tools(mcp.Deps{
 		Store:  store,
 		Hub:    hub,
@@ -154,6 +158,7 @@ func run() error {
 		Notifier:       notifier,
 		Backup:         backupMgr,
 		MCP:            mcpSrv,
+		Prober:         nodeProber,
 		Config:         cfg,
 		AgentBinaryDir: os.Getenv("MMX_AGENT_BINARY_DIR"),
 		WebFS:          webui.FS(), // 前端 embed 进二进制；未构建时为占位页

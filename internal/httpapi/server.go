@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"io/fs"
 	"log/slog"
 	"time"
@@ -11,9 +12,16 @@ import (
 	"github.com/mmx-project/mmx/internal/mcp"
 	"github.com/mmx-project/mmx/internal/notify"
 	"github.com/mmx-project/mmx/internal/probe"
+	"github.com/mmx-project/mmx/internal/prober"
 	"github.com/mmx-project/mmx/internal/storage"
 	"github.com/mmx-project/mmx/internal/xrayctl"
 )
+
+// Prober 是本层对 prober 包的最小依赖（接口化便于测试）。
+type Prober interface {
+	ProbeServer(ctx context.Context, serverID, actor string) (prober.Result, error)
+	ProbeAll(ctx context.Context)
+}
 
 // Options 是构造 HTTP 层所需的依赖。
 type Options struct {
@@ -26,6 +34,7 @@ type Options struct {
 	Notifier       *notify.Notifier
 	Backup         *backup.Manager
 	MCP            *mcp.Server
+	Prober         Prober
 	Config         config.MasterConfig
 	AgentBinaryDir string // Agent 二进制库存目录；为空则 /api/remote/agent/* 返回 404
 	WebFS          fs.FS  // 内嵌前端（可选）
@@ -44,6 +53,7 @@ type Server struct {
 	notifier       *notify.Notifier
 	backup         *backup.Manager
 	mcp            *mcp.Server
+	prober         Prober
 	cfg            config.MasterConfig
 	agentBinaryDir string
 	webFS          fs.FS
@@ -67,6 +77,7 @@ func New(o Options) *Server {
 		notifier:       o.Notifier,
 		backup:         o.Backup,
 		mcp:            o.MCP,
+		prober:         o.Prober,
 		cfg:            o.Config,
 		agentBinaryDir: o.AgentBinaryDir,
 		webFS:          o.WebFS,

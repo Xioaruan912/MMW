@@ -859,6 +859,54 @@ DELOK="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $
 curl -s -o "$WORK/preview3.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/servers/$SERVER_ID/xray-preview" >/dev/null
 grep -q '"inbounds"' "$WORK/preview3.json" && ok "清理后配置生成正常" || bad "清理后配置生成失败"
 
+head_ "7d8. 节点探测（TCP 真连）"
+# 触发一次探测：Agent 会对自己所在机器的节点端口做 TCP 握手
+PROBE_CODE="$(curl -s -o "$WORK/probe.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/servers/$SERVER_ID/probe")"
+[[ "$PROBE_CODE" == "200" ]] && ok "触发探测成功（HTTP 200）" || bad "触发探测失败 HTTP $PROBE_CODE: $(head -c 200 "$WORK/probe.json")"
+python3 - "$WORK/probe.json" <<'PY' && ok "探测结果结构正确" || bad "探测结果异常"
+import json, sys
+r = json.load(open(sys.argv[1]))['result']
+assert r['server_id'], r
+assert 'targets' in r and 'alive' in r, r
+# 节点端口没在真实监听，因此 alive 可能是 0 —— 这里只要求结构正确
+assert isinstance(r['alive'], int), r
+PY
+
+# 探测结果应落库
+curl -s -o "$WORK/latency.json" -b "$COOKIE" "$BASE/api/admin/nodes/latency?server_id=$SERVER_ID"
+python3 - "$WORK/latency.json" <<'PY' && ok "探测结果已落库并可按服务器查询" || bad "探测结果未落库"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d['total'] >= 1, f"应至少有一条探测记录: {d}"
+for node_id, rec in d['latency'].items():
+    assert rec['method'] == 'tcp', rec
+    assert 'alive' in rec and 'latency_ms' in rec, rec
+    assert rec['server_id'], rec
+    break
+PY
+
+# 节点列表接口应附带延迟，前端无需为每个节点单独请求
+curl -s -o "$WORK/nodes-lat.json" -b "$COOKIE" "$BASE/api/admin/nodes"
+grep -q '"latency"' "$WORK/nodes-lat.json" && ok "节点列表附带延迟数据" || bad "节点列表缺少延迟"
+
+# 单节点历史序列
+NODE_FOR_SERIES="$(cat "$WORK/latency.json" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)["latency"]
+print(next(iter(d))) if d else print("")' 2>/dev/null || echo '')"
+if [[ -n "$NODE_FOR_SERIES" ]]; then
+  SERIES_CODE="$(curl -s -o "$WORK/series.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/nodes/$NODE_FOR_SERIES/latency")"
+  [[ "$SERIES_CODE" == "200" ]] && grep -q '"points"' "$WORK/series.json" \
+    && ok "单节点探测历史可查" || bad "历史序列异常 HTTP $SERIES_CODE"
+else
+  bad "未能取到节点 ID 用于历史查询"
+fi
+
+# 批量触发（后台执行）
+ALL_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/probe/all")"
+[[ "$ALL_CODE" == "202" ]] && ok "全量探测为异步触发（202）" || bad "全量探测返回 $ALL_CODE"
+
 head_ "7e. 任务持久化与 Pull 降级通道"
 TASKS_CODE="$(curl -s -o "$WORK/tasks.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/tasks?server_id=$SERVER_ID")"
 TASKS_N="$(cat "$WORK/tasks.json" | jget total 2>/dev/null || echo 0)"
