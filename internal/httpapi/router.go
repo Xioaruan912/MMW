@@ -29,6 +29,9 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/agent/ws", s.hub.HandleWS)
 	r.Post("/api/agent/pull", s.handleAgentPull)
 
+	// ---- 订阅出口（公开，凭据即权限）----
+	r.Get("/sub/{token}", s.handleSubscription)
+
 	// ---- 远程安装 ----
 	r.Get("/api/remote/install.sh", s.handleInstallScript)
 	r.Get("/api/remote/agent/{platform}", s.handleAgentBinary)
@@ -63,6 +66,31 @@ func (s *Server) Routes() http.Handler {
 		pr.Get("/api/admin/tasks/kinds", s.handleTaskKinds)
 		pr.Get("/api/admin/audit", s.handleListAudit)
 		pr.Get("/api/admin/overview", s.handleOverview)
+
+		// ---- 入站 ----
+		pr.Get("/api/admin/inbounds", s.handleListInbounds)
+		pr.Post("/api/admin/inbounds", s.handleCreateInbound)
+		pr.Get("/api/admin/inbounds/{id}", s.handleGetInbound)
+		pr.Patch("/api/admin/inbounds/{id}", s.handleUpdateInbound)
+		pr.Delete("/api/admin/inbounds/{id}", s.handleDeleteInbound)
+		pr.Get("/api/admin/inbounds/{id}/clients", s.handleListClients)
+		pr.Post("/api/admin/inbounds/{id}/clients", s.handleAddClient)
+		pr.Delete("/api/admin/clients/{id}", s.handleDeleteClient)
+
+		// ---- 节点 ----
+		pr.Get("/api/admin/nodes", s.handleListNodes)
+		pr.Patch("/api/admin/nodes/{id}", s.handleUpdateNode)
+
+		// ---- Xray 配置 ----
+		pr.Post("/api/admin/servers/{id}/apply", s.handleApplyXray)
+		pr.Get("/api/admin/servers/{id}/xray-preview", s.handleXrayPreview)
+
+		// ---- 用户 ----
+		pr.Get("/api/admin/users", s.handleListUsers)
+		pr.Post("/api/admin/users", s.handleCreateUser)
+		pr.Patch("/api/admin/users/{id}", s.handleUpdateUser)
+		pr.Delete("/api/admin/users/{id}", s.handleDeleteUser)
+		pr.Post("/api/admin/users/{id}/sub-token", s.handleRotateSubToken)
 	})
 
 	// ---- 前端静态资源 ----

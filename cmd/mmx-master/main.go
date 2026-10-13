@@ -27,6 +27,7 @@ import (
 	"github.com/mmx-project/mmx/internal/storage"
 	"github.com/mmx-project/mmx/internal/version"
 	"github.com/mmx-project/mmx/internal/webui"
+	"github.com/mmx-project/mmx/internal/xrayctl"
 )
 
 func main() {
@@ -105,6 +106,7 @@ func run() error {
 		Store:          store,
 		Reg:            reg,
 		Hub:            hub,
+		Xray:           xrayctl.NewApplier(store, hub, xrayctl.DefaultOptions()),
 		Config:         cfg,
 		AgentBinaryDir: os.Getenv("MMX_AGENT_BINARY_DIR"),
 		WebFS:          webui.FS(), // 前端 embed 进二进制；未构建时为占位页

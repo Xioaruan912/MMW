@@ -8,6 +8,7 @@ import (
 	"github.com/mmx-project/mmx/internal/agentlink"
 	"github.com/mmx-project/mmx/internal/config"
 	"github.com/mmx-project/mmx/internal/storage"
+	"github.com/mmx-project/mmx/internal/xrayctl"
 )
 
 // Options 是构造 HTTP 层所需的依赖。
@@ -16,6 +17,7 @@ type Options struct {
 	Store          *storage.Store
 	Reg            *agentlink.Registry
 	Hub            *agentlink.Hub
+	Xray           *xrayctl.Applier
 	Config         config.MasterConfig
 	AgentBinaryDir string // Agent 二进制库存目录；为空则 /api/remote/agent/* 返回 404
 	WebFS          fs.FS  // 内嵌前端（可选）
@@ -29,6 +31,7 @@ type Server struct {
 	store          *storage.Store
 	reg            *agentlink.Registry
 	hub            *agentlink.Hub
+	xray           *xrayctl.Applier
 	cfg            config.MasterConfig
 	agentBinaryDir string
 	webFS          fs.FS
@@ -47,6 +50,7 @@ func New(o Options) *Server {
 		store:          o.Store,
 		reg:            o.Reg,
 		hub:            o.Hub,
+		xray:           o.Xray,
 		cfg:            o.Config,
 		agentBinaryDir: o.AgentBinaryDir,
 		webFS:          o.WebFS,

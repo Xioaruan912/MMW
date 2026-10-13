@@ -28,12 +28,12 @@
 
 | # | 功能 | 归属模块 | 阶段 | 状态 |
 |---|---|---|---|---|
-| B1 | 入站向导（协议 × 传输 × 安全层） | `inbound` | P6 | ⚪ |
-| B2 | 协议：VLESS / VMess / Trojan / Shadowsocks | `inbound` | P6 | ⚪ |
+| B1 | 入站向导（协议 × 传输 × 安全层） | `inbound` | P6 | 🟢 |
+| B2 | 协议：VLESS / VMess / Trojan / Shadowsocks | `inbound` | P6 | 🟢 |
 | B3 | 协议：Hysteria2 / AnyTLS / Snell / Mieru | `inbound` | P7 | ⚪ |
-| B4 | 传输：TCP / WS / gRPC / XHTTP | `inbound` | P6 | ⚪ |
-| B5 | 安全层：TLS / REALITY | `inbound` | P6 | ⚪ |
-| B6 | 节点增删改查 / 排序 / 标签 / 分组 | `node` | P6 | ⚪ |
+| B4 | 传输：TCP / WS / gRPC / HTTPUpgrade | `inbound` | P6 | 🟢 |
+| B5 | 安全层：TLS / REALITY | `inbound` | P6 | 🟢 |
+| B6 | 节点增删改查 / 排序 / 标签 / 分组 | `node` | P6 | 🟡 |
 | B7 | 批量导入（订阅 / URI / 剪贴板） | `node` | P7 | ⚪ |
 | B8 | 节点探测（真连测延迟） | `node` + `agent` | P7 | ⚪ |
 | B9 | 节点测速（上下行） | `speedtest` | P7 | ⚪ |
@@ -46,10 +46,10 @@
 
 | # | 功能 | 归属模块 | 阶段 | 状态 |
 |---|---|---|---|---|
-| C1 | 订阅链接生成 + 短码 | `subscription` | P6 | ⚪ |
-| C2 | 客户端格式：Clash / mihomo | `subscription` | P6 | ⚪ |
+| C1 | 订阅链接生成 + 凭据 | `subscription` | P6 | 🟢 |
+| C2 | 客户端格式：Clash / mihomo | `subscription` | P6 | 🟢 |
 | C3 | 客户端格式：Surge / Loon / QX / Stash / Shadowrocket | `subscription` | P7 | ⚪ |
-| C4 | 客户端格式：SingBox / URI / V2Ray / Egern / Surfboard | `subscription` | P7 | ⚪ |
+| C4 | 客户端格式：SingBox / URI / V2Ray（Egern / Surfboard 待补） | `subscription` | P7 | 🟡 |
 | C5 | 订阅文件管理（上传 / 编辑 / 分组） | `subscribe_files` | P6 | ⚪ |
 | C6 | 外部订阅同步（导入机场节点 + 流量聚合） | `external_sync` | P7 | ⚪ |
 | C7 | 代理组可视化编辑（拖拽 / 链式） | `proxygroups` | P7 | ⚪ |
@@ -61,9 +61,9 @@
 
 | # | 功能 | 归属模块 | 阶段 | 状态 |
 |---|---|---|---|---|
-| D1 | 用户 CRUD / 角色 / 状态 | `user` | P6 | ⚪ |
-| D2 | 多用户绑定订阅凭据 | `user` | P6 | ⚪ |
-| D3 | 用户流量配额 / 到期时间 | `user` | P6 | ⚪ |
+| D1 | 用户 CRUD / 角色 / 状态 | `user` | P6 | 🟢 |
+| D2 | 多用户绑定订阅凭据（含凭据轮换） | `user` | P6 | 🟢 |
+| D3 | 用户流量配额 / 到期时间（字段与 API 就绪，统计待做） | `user` | P6 | 🟡 |
 | D4 | 套餐（流量 / 时长 / 并发 / 节点数） | `packages` | P7 | ⚪ |
 | D5 | 续费 / 流量重置 / 流量修正 | `packages` | P7 | ⚪ |
 | D6 | 拼车（多套餐 / 座位 / 共享订阅） | `carpool` | P8 | ⚪ |
@@ -98,7 +98,7 @@
 | F9 | 通知（Telegram / Webhook / 摘要） | `notify` | P7 | ⚪ |
 | F10 | Telegram Bot + MiniApp | `tgbot` | P8 | ⚪ |
 | F11 | 内建 MCP 服务（`/mcp`） | `mcp` | P8 | ⚪ |
-| F12 | 静默模式 / 安全日志 / 防爆破 | `security` | P7 | ⚪ |
+| F12 | 登录防爆破 / CSRF / 可信 IP | `security` | P7 | 🟢 |
 
 ## G. 面板与体验
 
@@ -121,3 +121,20 @@
 | 🔵 拼车云中介 | 改为**本地中介**：同一主控内的用户之间拼车，不经任何外部服务 |
 | 🔵 REALITY 域名池云端共享 | 改为**本地池 + 可选多主控同步**（你自己控制节点间同步） |
 | 🔵 上游 Agent 官方二进制 | Agent 完全自研，协议见 `docs/AGENT-PROTOCOL.md` |
+
+---
+
+## 进度快照
+
+| 组 | 已完成 | 总计 |
+|---|---:|---:|
+| A 主控与 Agent 编排 | 11 | 12 |
+| B 节点与入站 | 4 | 13 |
+| C 订阅分发 | 3 | 10 |
+| D 用户 / 套餐 / 拼车 | 3 | 9 |
+| E 证书 / 域名 | 0 | 7 |
+| F 探针 / 运维 | 2 | 12 |
+| G 面板与体验 | 1 | 6 |
+| **合计** | **24** | **69** |
+
+> 更新于 P6 主链路打通之后。图例：🟢 已实现 / 🟡 进行中 / ⚪ 未开始 / 🔵 有意不实现。

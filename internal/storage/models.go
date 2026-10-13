@@ -32,8 +32,14 @@ type User struct {
 	Role         string `json:"role"`
 	Status       string `json:"status"`
 	TOTPSecret   string `json:"-"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
+	// 订阅凭据（用户可重置；重置后旧链接立即失效）
+	SubToken string `json:"sub_token"`
+	// 配额与有效期：TrafficLimit=0 表示不限量；ExpireAt=0 表示不过期
+	TrafficLimit int64 `json:"traffic_limit"`
+	TrafficUsed  int64 `json:"traffic_used"`
+	ExpireAt     int64 `json:"expire_at"`
+	CreatedAt    int64 `json:"created_at"`
+	UpdatedAt    int64 `json:"updated_at"`
 }
 
 // Server 是一台受管服务器。

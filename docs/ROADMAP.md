@@ -8,16 +8,17 @@
 
 | 阶段 | 主题 | 关键交付 | 状态 |
 |---|---|---|---|
-| **P0** | 项目规划 | 架构 / 协议 / 功能矩阵 / 路线图 | 🟡 |
-| **P1** | 工程骨架 | go.mod / 配置 / 日志 / SQLite / HTTP 路由 / Makefile | ⚪ |
-| **P2** | 共享协议 | `pkg/agentproto` 信封与全部载荷 | ⚪ |
-| **P3** | 主控编排 | `agentlink`：服务器 + 令牌 + WS 网关 + 安装命令生成 | ⚪ |
-| **P4** | Agent 运行时 | `mmx-agent`：出站连接 / 心跳 / 指标 / 任务执行 | ⚪ |
-| **P5** | **端到端打通** | Master + Agent 跑通，指标入库，API 可见在线 | ⚪ |
-| **P6** | 核心业务 | 用户 / 入站 / 节点 / 订阅 / Xray 配置下发 / 双因子 | ⚪ |
+| **P0** | 项目规划 | 架构 / 协议 / 功能矩阵 / 路线图 | ✅ |
+| **P1** | 工程骨架 | go.mod / 配置 / 日志 / SQLite / HTTP 路由 / Makefile | ✅ |
+| **P2** | 共享协议 | `pkg/agentproto` 信封与全部载荷 | ✅ |
+| **P3** | 主控编排 | `agentlink`：服务器 + 令牌 + WS 网关 + 安装命令生成 | ✅ |
+| **P4** | Agent 运行时 | `mmx-agent`：出站连接 / 心跳 / 指标 / 任务执行 | ✅ |
+| **P5** | **端到端打通** | Master + Agent 跑通，指标入库，API 可见在线 | ✅ |
+| **D1** | 安全欠债 | 登录防爆破 / CSRF / 可信客户端 IP | ✅ |
+| **P6** | 核心业务 | 用户 / 入站 / 节点 / 订阅 / Xray 配置下发 / 双因子 | 🟡 主链路已通 |
 | **P7** | 完整分发 | 12 种订阅格式 / 模板V3 / 探针 / ACME / 通知 / 面板主题 | ⚪ |
 | **P8** | 高级能力 | 域名池 / 拼车 / TG Bot / MCP / 转发 / 限速 / 测速 | ⚪ |
-| **P9** | 工程化 | 前端 embed / Docker / 一键安装 / CI / 文档站 | ⚪ |
+| **P9** | 工程化 | 前端 embed ✅ / Docker / 一键安装 / CI / 文档站 | 🟡 |
 
 ---
 
@@ -175,3 +176,45 @@ mmx/
 3. **依赖只选上游开源项目**（xray-core / lego / go-telegram-bot / mcp-go …），不 vendor 任何厂商 fork。
 4. **每个新功能必须配端到端断言**（`scripts/e2e*.sh`），不做"只写不验"。
 5. 提交信息用 `feat(scope): ...` / `fix(scope): ...` 规范。
+
+---
+
+## 进度快照
+
+```
+P0 ✅  规划            架构 / 协议 / 功能矩阵 / 路线图
+P1 ✅  工程骨架         go.mod / Makefile / config / logging / storage(只追加迁移) / httpapi 中间件
+P2 ✅  共享协议         pkg/agentproto（信封 + 全部载荷 + 任务白名单 + Ed25519）
+P3 ✅  主控编排         internal/agentlink（registry / hub / ws / installer / sweeper）
+P4 ✅  Agent 运行时     internal/agent（config / link / collect / xray）
+P5 ✅  端到端           e2e 覆盖 Master-Agent 全链路
+D1 ✅  安全欠债         登录防爆破 / CSRF / 可信客户端 IP 判定
+P6 🟡  核心业务主链路   入站 → 用户 → 凭据 → Xray 配置生成 → 下发 → Agent 落地 → 订阅输出
+P9 🟡  工程化           前端已 embed（单二进制交付）
+```
+
+### P6 已完成（e2e 覆盖）
+
+| 断言 | 结果 |
+|---|---|
+| 创建入站（VLESS × TCP × REALITY）+ 自动生成展示节点 | ✅ |
+| 创建用户 + 自动签发订阅凭据 | ✅ |
+| 为用户在入站上签发 UUID 凭据 | ✅ |
+| `GET /servers/{id}/xray-preview` 生成完整 Xray 配置 | ✅ |
+| rev 由配置内容派生（内容变则 rev 变，内容同则 rev 同） | ✅ |
+| `POST /servers/{id}/apply` 经签名任务下发，Agent 同步回执 | ✅ |
+| Agent 真实写出 `config.json` 并记录 `.mmx-rev` | ✅ |
+| 订阅按 UA 分流（Clash / base64-URI / sing-box） | ✅ |
+| Clash 订阅含节点名、uuid、REALITY 参数 | ✅ |
+| URI 订阅含 `pbk=`（REALITY 公钥由服务端私钥派生） | ✅ |
+| 未实现的私有格式（Surge/Loon/QX）明确报错而非静默降级 | ✅ |
+| 无效订阅凭据返回 404 | ✅ |
+
+### P6 剩余
+
+- `xray.install`：Agent 侧下载并安装真实 Xray 内核
+- TOTP 双因子、API Token
+- 流量统计与计费周期
+- SSE 流式安装进度
+- 前端：入站向导 / 节点列表 / 用户列表 / 订阅页
+- 更多订阅格式（Surge / Loon / QX / Stash / Egern / Surfboard）

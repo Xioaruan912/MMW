@@ -221,3 +221,80 @@ func (db *DB) Migrate(ctx context.Context) error {
 	}
 	return nil
 }
+
+// migrationV2 返回入站 / 节点 / 流量与服务端可选字段的迁移。
+// 单独拆出来是为了新版 gofmt 下长 SQL 字面量更易读。
+func init() {
+	migrations = append(migrations, migration{
+		Version: 2,
+		Name:    "inbounds_nodes_traffic",
+		SQL:     migrationV2SQL,
+	})
+}
+
+const migrationV2SQL = `
+-- ---------- 入站（一台服务器上的一个监听端口） ----------
+CREATE TABLE IF NOT EXISTS inbounds (
+    id          TEXT PRIMARY KEY,
+    server_id   TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    tag         TEXT NOT NULL,
+    protocol    TEXT NOT NULL,                      -- vless | vmess | trojan | shadowsocks
+    transport   TEXT NOT NULL DEFAULT 'tcp',        -- tcp | ws | grpc | httpupgrade
+    security    TEXT NOT NULL DEFAULT 'none',       -- none | tls | reality
+    port        INTEGER NOT NULL,
+    listen      TEXT NOT NULL DEFAULT '0.0.0.0',
+    settings    TEXT NOT NULL DEFAULT '{}',         -- 协议参数（clients 由 inbound_clients 派生）
+    stream      TEXT NOT NULL DEFAULT '{}',         -- 传输 / 安全层参数
+    sniffing    TEXT NOT NULL DEFAULT '{}',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    remark      TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    UNIQUE(server_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_inbounds_server ON inbounds(server_id);
+
+-- ---------- 入站下的客户端凭据（一个用户一条） ----------
+CREATE TABLE IF NOT EXISTS inbound_clients (
+    id          TEXT PRIMARY KEY,
+    inbound_id  TEXT NOT NULL REFERENCES inbounds(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    uuid        TEXT NOT NULL,
+    email       TEXT NOT NULL DEFAULT '',
+    flow        TEXT NOT NULL DEFAULT '',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  INTEGER NOT NULL,
+    UNIQUE(inbound_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_clients_user ON inbound_clients(user_id);
+CREATE INDEX IF NOT EXISTS idx_clients_inbound ON inbound_clients(inbound_id);
+
+-- ---------- 节点（入站的展示层：名字 / 地区 / 排序） ----------
+CREATE TABLE IF NOT EXISTS nodes (
+    id          TEXT PRIMARY KEY,
+    inbound_id  TEXT NOT NULL UNIQUE REFERENCES inbounds(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    region      TEXT NOT NULL DEFAULT '',
+    tags        TEXT NOT NULL DEFAULT '',
+    sort        INTEGER NOT NULL DEFAULT 0,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+
+-- ---------- 日流量聚合 ----------
+CREATE TABLE IF NOT EXISTS traffic_daily (
+    day         TEXT NOT NULL,                      -- YYYY-MM-DD（主控本地时区）
+    server_id   TEXT NOT NULL,
+    up          INTEGER NOT NULL DEFAULT 0,
+    down        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, server_id)
+);
+
+-- ---------- 用户订阅凭据与配额 ----------
+ALTER TABLE users ADD COLUMN sub_token    TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN traffic_limit INTEGER NOT NULL DEFAULT 0;   -- 字节，0 = 不限
+ALTER TABLE users ADD COLUMN traffic_used  INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN expire_at     INTEGER NOT NULL DEFAULT 0;   -- unix ms，0 = 不过期
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_sub_token ON users(sub_token) WHERE sub_token != '';
+`

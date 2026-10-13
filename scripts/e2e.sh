@@ -119,7 +119,9 @@ cat > "$WORK/agent/config.yaml" <<YAML
 master_url: "$BASE"
 enroll_token: "$ENROLL_TOKEN"
 state_dir: "$WORK/agent"
-xray_mode: "none"
+xray_mode: "external"
+xray_bin_path: "$WORK/no-such-xray-binary"
+xray_config_dir: "$WORK/agent/xray"
 heartbeat_interval: 2s
 metrics_interval: 2s
 debug: true
@@ -163,6 +165,120 @@ if [[ "$TASK_CODE" == "200" && "$TASK_STATUS" == "ok" ]]; then
 else
   bad "任务失败 HTTP $TASK_CODE status=$TASK_STATUS: $(head -c 200 "$WORK/task.json")"
 fi
+
+head_ "7b. 建入站 + 用户 + 凭据"
+REALITY_KEY="$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("="))')"
+
+INB_CODE="$(curl -s -o "$WORK/inbound.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/inbounds" -H 'Content-Type: application/json' -d "{
+    \"server_id\": \"$SERVER_ID\",
+    \"tag\": \"vless-reality-443\",
+    \"protocol\": \"vless\",
+    \"transport\": \"tcp\",
+    \"security\": \"reality\",
+    \"port\": 24443,
+    \"remark\": \"e2e 主节点\",
+    \"node_name\": \"香港-01\",
+    \"stream\": {
+      \"reality_dest\": \"www.example.com:443\",
+      \"reality_server_names\": [\"www.example.com\"],
+      \"reality_private_key\": \"$REALITY_KEY\",
+      \"reality_short_ids\": [\"0123456789abcdef\"]
+    },
+    \"settings\": { \"flow\": \"xtls-rprx-vision\" }
+  }")"
+INBOUND_ID="$(cat "$WORK/inbound.json" | jget inbound.id 2>/dev/null || echo '')"
+[[ "$INB_CODE" == "201" && -n "$INBOUND_ID" ]] && ok "入站已建: $INBOUND_ID (vless/tcp/reality)" \
+  || { bad "建入站失败 HTTP $INB_CODE: $(head -c 300 "$WORK/inbound.json")"; }
+
+NODE_ID="$(cat "$WORK/inbound.json" | jget node.id 2>/dev/null || echo '')"
+[[ -n "$NODE_ID" ]] && ok "展示节点自动生成: $NODE_ID" || bad "未生成展示节点"
+
+USER_CODE="$(curl -s -o "$WORK/user.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/users" -H 'Content-Type: application/json' \
+  -d '{"username":"e2e-alice","password":"Alice@123456","nickname":"Alice"}')"
+USER_ID="$(cat "$WORK/user.json" | jget user.id 2>/dev/null || echo '')"
+SUB_TOKEN="$(cat "$WORK/user.json" | jget user.sub_token 2>/dev/null || echo '')"
+[[ "$USER_CODE" == "201" && -n "$USER_ID" ]] && ok "用户已建: $USER_ID（自动签发订阅凭据）" \
+  || bad "建用户失败 HTTP $USER_CODE: $(head -c 300 "$WORK/user.json")"
+
+CLI_CODE="$(curl -s -o "$WORK/client.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/inbounds/$INBOUND_ID/clients" -H 'Content-Type: application/json' \
+  -d "{\"user_id\":\"$USER_ID\",\"email\":\"alice@e2e\"}")"
+CLIENT_UUID="$(cat "$WORK/client.json" | jget client.uuid 2>/dev/null || echo '')"
+[[ "$CLI_CODE" == "201" && -n "$CLIENT_UUID" ]] && ok "凭据已签发 uuid=${CLIENT_UUID:0:8}…" \
+  || bad "签发凭据失败 HTTP $CLI_CODE: $(head -c 300 "$WORK/client.json")"
+
+head_ "7c. Xray 配置生成与下发"
+PREV_CODE="$(curl -s -o "$WORK/preview.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/servers/$SERVER_ID/xray-preview")"
+PREV_REV="$(cat "$WORK/preview.json" | jget rev 2>/dev/null || echo '')"
+[[ "$PREV_CODE" == "200" && -n "$PREV_REV" ]] && ok "配置预览生成 rev=$PREV_REV" \
+  || bad "配置预览失败 HTTP $PREV_CODE: $(head -c 300 "$WORK/preview.json")"
+python3 - "$WORK/preview.json" <<'PY' >/dev/null 2>&1 && ok "配置结构校验通过（inbounds/outbounds/routing 齐备）" || bad "配置结构不完整"
+import json,sys
+c=json.load(open(sys.argv[1]))['config']
+assert c.get('inbounds') and c.get('outbounds') and c.get('routing'), 'missing sections'
+assert any(i.get('tag')=='vless-reality-443' for i in c['inbounds']), 'inbound tag missing'
+ib=[i for i in c['inbounds'] if i['tag']=='vless-reality-443'][0]
+assert ib['streamSettings']['security']=='reality', 'security not reality'
+assert ib['settings']['clients'][0]['id'], 'client uuid missing'
+PY
+
+APPLY_CODE="$(curl -s -o "$WORK/apply.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/servers/$SERVER_ID/apply")"
+APPLIED="$(cat "$WORK/apply.json" | jget result.applied 2>/dev/null || echo 'false')"
+APPLY_REV="$(cat "$WORK/apply.json" | jget result.rev 2>/dev/null || echo '')"
+[[ "$APPLY_CODE" == "200" && "$APPLIED" == "True" ]] && ok "配置已下发并由 Agent 落地（rev=$APPLY_REV）" \
+  || bad "配置下发失败 HTTP $APPLY_CODE: $(head -c 300 "$WORK/apply.json")"
+
+# Agent 侧真实落地验证
+sleep 1
+CFG_FILE="$WORK/agent/xray/config.json"
+REV_FILE="$WORK/agent/xray/.mmx-rev"
+if [[ -f "$CFG_FILE" ]]; then
+  ok "Agent 已写出配置文件（$(stat -c %s "$CFG_FILE") 字节）"
+  python3 - "$CFG_FILE" "$REV_FILE" "$APPLY_REV" <<'PY' && ok "落地配置内容与 rev 一致" || bad "落地配置内容不一致"
+import json, sys
+cfg_path, rev_path, want_rev = sys.argv[1], sys.argv[2], sys.argv[3]
+c = json.load(open(cfg_path))
+assert any(i.get('tag') == 'vless-reality-443' for i in c['inbounds']), 'inbound 未写入'
+ib = [i for i in c['inbounds'] if i['tag'] == 'vless-reality-443'][0]
+assert ib['streamSettings']['security'] == 'reality', 'reality 配置丢失'
+assert ib['settings']['clients'], 'clients 丢失'
+got_rev = open(rev_path).read().strip()
+assert got_rev == want_rev, f'rev 不匹配: {got_rev} != {want_rev}'
+PY
+else
+  bad "Agent 未写出配置文件: $CFG_FILE"
+fi
+
+head_ "7d. 订阅输出"
+SUB_CODE="$(curl -s -o "$WORK/sub-clash.yaml" -w '%{http_code}' -A 'clash-verge/1.7' "$BASE/sub/$SUB_TOKEN")"
+[[ "$SUB_CODE" == "200" ]] && ok "Clash 订阅 200" || bad "Clash 订阅 HTTP $SUB_CODE"
+grep -q "香港-01" "$WORK/sub-clash.yaml" && ok "订阅含节点名" || bad "订阅缺少节点名"
+grep -q "$CLIENT_UUID" "$WORK/sub-clash.yaml" && ok "订阅含该用户的 uuid" || bad "订阅缺少用户 uuid"
+grep -q "reality-opts" "$WORK/sub-clash.yaml" && ok "订阅含 REALITY 参数" || bad "订阅缺少 REALITY 参数"
+
+# Shadowrocket 类客户端期望 base64 包装的 URI 列表
+curl -s -o "$WORK/sub-b64.txt" -A 'Shadowrocket/2.2' "$BASE/sub/$SUB_TOKEN"
+python3 - "$WORK/sub-b64.txt" <<'PY' > "$WORK/sub-uri.txt" && ok "URI 订阅（Shadowrocket UA）为 base64 包装的 vless://" || bad "URI 订阅格式错误"
+import base64, sys
+raw = open(sys.argv[1], 'rb').read().strip()
+try:
+    plain = base64.b64decode(raw).decode()
+except Exception:
+    plain = raw.decode(errors='replace')
+assert plain.startswith('vless://'), f'期望 vless:// 开头，实得 {plain[:40]!r}'
+sys.stdout.write(plain)
+PY
+grep -q "pbk=" "$WORK/sub-uri.txt" && ok "URI 含 REALITY 公钥（pbk=）" || bad "URI 缺少 REALITY 公钥"
+
+# 显式指定 format=uri 时应返回明文
+curl -s -o "$WORK/sub-plain.txt" "$BASE/sub/$SUB_TOKEN?format=uri"
+grep -q "^vless://" "$WORK/sub-plain.txt" && ok "format=uri 返回明文 URI" || bad "format=uri 未生效"
+
+curl -s -o /dev/null -w '%{http_code}' "$BASE/sub/not-a-real-token" > "$WORK/bad.tmp"
+[[ "$(cat "$WORK/bad.tmp")" == "404" ]] && ok "无效订阅凭据返回 404" || bad "无效凭据未拒绝"
 
 head_ "8. 非白名单任务被拒"
 REJ_CODE="$(curl -s -o "$WORK/rej.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" \

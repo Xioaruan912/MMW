@@ -200,13 +200,17 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u storage.
 
 func publicUser(u storage.User) map[string]any {
 	return map[string]any{
-		"id":         u.ID,
-		"username":   u.Username,
-		"nickname":   u.Nickname,
-		"email":      u.Email,
-		"role":       u.Role,
-		"status":     u.Status,
-		"created_at": u.CreatedAt,
+		"id":            u.ID,
+		"username":      u.Username,
+		"nickname":      u.Nickname,
+		"email":         u.Email,
+		"role":          u.Role,
+		"status":        u.Status,
+		"sub_token":     u.SubToken,
+		"traffic_limit": u.TrafficLimit,
+		"traffic_used":  u.TrafficUsed,
+		"expire_at":     u.ExpireAt,
+		"created_at":    u.CreatedAt,
 	}
 }
 

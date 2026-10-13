@@ -17,14 +17,17 @@ const (
 	StatusOff = "disabled"
 )
 
-const userCols = `id,username,password_hash,nickname,email,role,status,totp_secret,created_at,updated_at`
+const userCols = `id,username,password_hash,nickname,email,role,status,totp_secret,
+                   sub_token,traffic_limit,traffic_used,expire_at,created_at,updated_at`
 
 func scanUser(sc interface {
 	Scan(...any) error
 }) (User, error) {
 	var u User
 	err := sc.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Nickname, &u.Email,
-		&u.Role, &u.Status, &u.TOTPSecret, &u.CreatedAt, &u.UpdatedAt)
+		&u.Role, &u.Status, &u.TOTPSecret,
+		&u.SubToken, &u.TrafficLimit, &u.TrafficUsed, &u.ExpireAt,
+		&u.CreatedAt, &u.UpdatedAt)
 	return u, err
 }
 
@@ -47,9 +50,10 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash, nickname
 		CreatedAt: now, UpdatedAt: now,
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO users(`+userCols+`) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO users(`+userCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		u.ID, u.Username, u.PasswordHash, u.Nickname, u.Email, u.Role, u.Status,
-		u.TOTPSecret, u.CreatedAt, u.UpdatedAt)
+		u.TOTPSecret, u.SubToken, u.TrafficLimit, u.TrafficUsed, u.ExpireAt,
+		u.CreatedAt, u.UpdatedAt)
 	if err != nil {
 		return User{}, err
 	}
@@ -148,4 +152,69 @@ func replaceAll(s, old, new string) string {
 		out = append(out, s[i])
 	}
 	return string(out)
+}
+
+// ---------------------------------------------------------------------------
+// 订阅凭据与配额
+// ---------------------------------------------------------------------------
+
+// SetUserSubToken 设置（或轮换）用户的订阅凭据。
+func (s *Store) SetUserSubToken(ctx context.Context, userID, token string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET sub_token=?, updated_at=? WHERE id=?`,
+		token, nowMS(), userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetUserBySubToken 用订阅凭据查用户。
+func (s *Store) GetUserBySubToken(ctx context.Context, token string) (User, error) {
+	if token == "" {
+		return User{}, ErrNotFound
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE sub_token=?`, token)
+	u, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	return u, err
+}
+
+// UpdateUser 更新用户的可变字段（不含口令）。
+func (s *Store) UpdateUser(ctx context.Context, u User) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET nickname=?, email=?, role=?, status=?,
+             traffic_limit=?, traffic_used=?, expire_at=?, updated_at=? WHERE id=?`,
+		u.Nickname, u.Email, u.Role, u.Status,
+		u.TrafficLimit, u.TrafficUsed, u.ExpireAt, nowMS(), u.ID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetUserPassword 设置口令散列。
+func (s *Store) SetUserPassword(ctx context.Context, userID, hash string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash=?, updated_at=? WHERE id=?`,
+		hash, nowMS(), userID)
+	return err
+}
+
+// DeleteUser 删除用户（其客户端凭据级联删除）。
+func (s *Store) DeleteUser(ctx context.Context, userID string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id=?`, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
