@@ -4,6 +4,7 @@ package auth
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -62,4 +63,9 @@ func RoleAllowed(role string, allowed ...string) bool {
 		}
 	}
 	return false
+}
+
+// ConstantTimeEqualString 以常量时间比较两个字符串。
+func ConstantTimeEqualString(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }

@@ -53,10 +53,25 @@ export class ApiError extends Error {
   }
 }
 
+function csrfToken(): string {
+  const m = document.cookie.match(/(?:^|;\s*)mmx_csrf=([^;]*)/)
+  return m ? decodeURIComponent(m[1]) : ''
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((init?.headers as Record<string, string>) ?? {}),
+  }
+  // 状态变更请求必须带 CSRF 令牌（double-submit cookie）
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const t = csrfToken()
+    if (t) headers['X-CSRF-Token'] = t
+  }
   const res = await fetch(path, {
     credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    headers,
     ...init,
   })
   const text = await res.text()

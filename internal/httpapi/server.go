@@ -34,6 +34,7 @@ type Server struct {
 	webFS          fs.FS
 	version        string
 	startedAt      time.Time
+	limiter        *loginLimiter
 }
 
 // New 构造 HTTP 层。
@@ -51,5 +52,6 @@ func New(o Options) *Server {
 		webFS:          o.WebFS,
 		version:        o.Version,
 		startedAt:      o.StartedAt,
+		limiter:        newLoginLimiter(),
 	}
 }

@@ -28,11 +28,12 @@ var (
 //   - conns / ipLocks / pending 三张表由 mu 保护
 //   - 向连接写数据一律走带缓冲的 send channel，绝不直接写 websocket.Conn
 type Hub struct {
-	log   *slog.Logger
-	store *storage.Store
-	reg   *Registry
-	priv  ed25519.PrivateKey
-	lock  time.Duration // token 换 IP 的锁定窗口
+	log        *slog.Logger
+	store      *storage.Store
+	reg        *Registry
+	priv       ed25519.PrivateKey
+	lock       time.Duration // token 换 IP 的锁定窗口
+	trustProxy bool          // 是否采信 X-Forwarded-For / X-Real-IP
 
 	mu      sync.RWMutex
 	conns   map[string]*conn                             // serverID -> 连接
@@ -83,16 +84,17 @@ func (c *conn) trySend(env agentproto.Envelope) bool {
 }
 
 // NewHub 构造 Hub。priv 是主控 Ed25519 私钥，用于给任务签名。
-func NewHub(log *slog.Logger, store *storage.Store, reg *Registry, priv ed25519.PrivateKey, tokenReuseLock time.Duration) *Hub {
+func NewHub(log *slog.Logger, store *storage.Store, reg *Registry, priv ed25519.PrivateKey, tokenReuseLock time.Duration, trustProxy bool) *Hub {
 	return &Hub{
-		log:     log,
-		store:   store,
-		reg:     reg,
-		priv:    priv,
-		lock:    tokenReuseLock,
-		conns:   make(map[string]*conn),
-		ipLocks: make(map[string]ipLock),
-		pending: make(map[string]chan agentproto.TaskResultPayload),
+		log:        log,
+		store:      store,
+		reg:        reg,
+		priv:       priv,
+		lock:       tokenReuseLock,
+		trustProxy: trustProxy,
+		conns:      make(map[string]*conn),
+		ipLocks:    make(map[string]ipLock),
+		pending:    make(map[string]chan agentproto.TaskResultPayload),
 	}
 }
 

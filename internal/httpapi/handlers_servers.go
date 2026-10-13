@@ -144,7 +144,7 @@ func (s *Server) handleDeleteServer(w http.ResponseWriter, r *http.Request) {
 		mapError(s.log, w, err, "delete server")
 		return
 	}
-	s.store.Audit(r.Context(), storage.AuditServerDelete, username, id, "", clientIP(r))
+	s.store.Audit(r.Context(), storage.AuditServerDelete, username, id, "", s.clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

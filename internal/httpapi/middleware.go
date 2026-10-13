@@ -12,6 +12,7 @@ import (
 
 	"github.com/mmx-project/mmx/internal/auth"
 	"github.com/mmx-project/mmx/internal/idgen"
+	"github.com/mmx-project/mmx/internal/reqinfo"
 	"github.com/mmx-project/mmx/internal/storage"
 )
 
@@ -126,7 +127,7 @@ func (s *Server) mwAccessLog(next http.Handler) http.Handler {
 		s.log.Debug("http",
 			"method", r.Method, "path", r.URL.Path, "status", sw.status,
 			"bytes", sw.bytes, "dur", time.Since(start).Round(time.Millisecond).String(),
-			"ip", clientIP(r))
+			"ip", s.clientIP(r))
 	})
 }
 
@@ -166,7 +167,7 @@ func (s *Server) mwRequireAdmin(next http.Handler) http.Handler {
 	})
 }
 
-func clientIP(r *http.Request) string {
+func directClientIP(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
@@ -175,4 +176,9 @@ func clientIP(r *http.Request) string {
 		host = host[:i]
 	}
 	return host
+}
+
+// clientIP 在信任反代的前提下解析真实客户端 IP。
+func (s *Server) clientIP(r *http.Request) string {
+	return reqinfo.ClientIP(r, s.cfg.TrustProxy)
 }

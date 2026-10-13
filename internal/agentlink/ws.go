@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mmx-project/mmx/internal/reqinfo"
 	"github.com/mmx-project/mmx/internal/storage"
 	"github.com/mmx-project/mmx/pkg/agentproto"
 )
@@ -37,15 +37,6 @@ func TokenFromRequest(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get("token"))
 }
 
-// ClientIP 提取客户端 IP（只信任直连地址，反代场景由上层决定是否覆盖）。
-func ClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
@@ -66,7 +57,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := ClientIP(r)
+	ip := reqinfo.ClientIP(r, h.trustProxy)
 	if !h.registerPrecheck(tok.ID, ip, srv.ID) {
 		writeWSError(w, http.StatusConflict, agentproto.CodeTokenReuse,
 			"agent_token 被不同 IP 复用，请为每台服务器使用独立令牌")

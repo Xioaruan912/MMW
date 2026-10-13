@@ -95,7 +95,7 @@ func run() error {
 		OfflineFactor: cfg.AgentOfflineFactor,
 		PublicKey:     pub,
 	})
-	hub := agentlink.NewHub(log, store, reg, priv, cfg.AgentTokenReuseLock)
+	hub := agentlink.NewHub(log, store, reg, priv, cfg.AgentTokenReuseLock, cfg.TrustProxy)
 
 	sweeper := agentlink.NewSweeper(log, reg, hub, 30*time.Second, 30*24*time.Hour)
 	go sweeper.Run(ctx)

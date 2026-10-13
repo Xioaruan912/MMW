@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,7 +41,7 @@ type enrollResp struct {
 // handleAgentEnroll 处理 Agent 首次入驻。
 func (s *Server) handleAgentEnroll(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 
 	var req enrollReq
 	if err := decodeJSON(r, &req); err != nil {
@@ -119,7 +120,7 @@ func (s *Server) handleAgentPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	agentVersion := ""
 	if req.Hello != nil {
 		agentVersion = req.Hello.AgentVersion
@@ -294,7 +295,7 @@ func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(upath, "assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
-			http.ServeContent(w, r, upath, st.ModTime(), f.(io.ReadSeeker))
+			serveFile(w, r, upath, st.ModTime(), f)
 			return
 		}
 	}
@@ -308,6 +309,28 @@ func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(idx)
+}
+
+// serveFile 提供静态文件。
+//
+// 不使用无保护的 `f.(io.ReadSeeker)` —— 一旦底层 fs.File 不实现 ReadSeeker，
+// 类型断言会 panic（embed.FS 的实现细节不应成为线上风险）。
+// 支持 Seek 时走 ServeContent（获得 Range / If-Modified-Since 能力），
+// 否则退化为整体拷贝。
+func serveFile(w http.ResponseWriter, r *http.Request, name string, modTime time.Time, f fs.File) {
+	if rs, ok := f.(io.ReadSeeker); ok {
+		http.ServeContent(w, r, name, modTime, rs)
+		return
+	}
+	if st, err := f.Stat(); err == nil {
+		if ct := mime.TypeByExtension(filepath.Ext(name)); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		w.Header().Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
+		w.Header().Set("Content-Length", itoa64(st.Size()))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, f)
 }
 
 func hashToken(t string) string {

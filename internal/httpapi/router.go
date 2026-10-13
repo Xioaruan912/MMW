@@ -40,14 +40,14 @@ func (s *Server) Routes() http.Handler {
 
 	// ---- 需要登录 ----
 	r.Group(func(pr chi.Router) {
-		pr.Use(s.mwRequireAuth)
+		pr.Use(s.mwRequireAuth, s.mwCSRF)
 		pr.Post("/api/logout", s.handleLogout)
 		pr.Get("/api/me", s.handleMe)
 	})
 
 	// ---- 需要管理员 ----
 	r.Group(func(pr chi.Router) {
-		pr.Use(s.mwRequireAuth, s.mwRequireAdmin)
+		pr.Use(s.mwRequireAuth, s.mwCSRF, s.mwRequireAdmin)
 
 		pr.Get("/api/admin/servers", s.handleListServers)
 		pr.Post("/api/admin/servers", s.handleCreateServer)

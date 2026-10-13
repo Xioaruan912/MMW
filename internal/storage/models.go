@@ -130,4 +130,5 @@ const (
 	AuditTaskDispatch     = "task.dispatch"
 	AuditLoginOK          = "auth.login.ok"
 	AuditLoginFail        = "auth.login.fail"
+	AuditLoginLocked      = "auth.login.locked"
 )

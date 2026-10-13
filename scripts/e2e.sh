@@ -75,8 +75,28 @@ INIT_CODE="$(curl -s -o "$WORK/init.json" -w '%{http_code}' -c "$COOKIE" -X POST
 ME_CODE="$(curl -s -o "$WORK/me.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/me")"
 [[ "$ME_CODE" == "200" ]] && ok "会话有效 (/api/me 200)" || bad "/api/me 返回 $ME_CODE"
 
+CSRF="$(awk '/mmx_csrf/ {print $7}' "$COOKIE" | tail -1)"
+[[ -n "$CSRF" ]] && ok "CSRF 令牌已下发" || bad "未收到 mmx_csrf cookie"
+
+# 负例：带会话但不带 CSRF 头，状态变更必须被拒
+NO_CSRF_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -X POST "$BASE/api/admin/servers" \
+  -H 'Content-Type: application/json' -d '{"name":"csrf-probe"}')"
+[[ "$NO_CSRF_CODE" == "403" ]] && ok "缺少 CSRF 头的变更请求被拒（403）" || bad "CSRF 防护失效：HTTP $NO_CSRF_CODE"
+
+head_ "2b. 登录防爆破"
+LOCKED=""
+for i in $(seq 1 7); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" \
+    -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-password"}')"
+  if [[ "$code" == "429" ]]; then LOCKED="yes"; break; fi
+done
+[[ "$LOCKED" == "yes" ]] && ok "连续错误口令触发限流（429）" || bad "登录限流未生效"
+GOOD_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" \
+  -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin@123456"}')"
+[[ "$GOOD_CODE" == "429" ]] && ok "锁定期内正确口令也被拒（429）" || bad "锁定期内竟然放行了：HTTP $GOOD_CODE"
+
 head_ "3. 新建服务器并取入驻令牌"
-CREATE_CODE="$(curl -s -o "$WORK/srv.json" -w '%{http_code}' -b "$COOKIE" -X POST "$BASE/api/admin/servers" \
+CREATE_CODE="$(curl -s -o "$WORK/srv.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/servers" \
   -H 'Content-Type: application/json' \
   -d '{"name":"e2e-node-01","address":"127.0.0.1","remark":"端到端测试","xray_mode":"external"}')"
 [[ "$CREATE_CODE" == "201" ]] || { bad "新建服务器失败 HTTP $CREATE_CODE: $(cat "$WORK/srv.json")"; exit 1; }
@@ -134,7 +154,7 @@ print(f'{u/1048576:.0f}MB/{t/1048576:.0f}MB' if t else 'n/a')" 2>/dev/null)"
 ok "最新指标: cpu=${CPU}% mem=$MEMPCT"
 
 head_ "7. 任务下发（白名单）"
-TASK_CODE="$(curl -s -o "$WORK/task.json" -w '%{http_code}' -b "$COOKIE" -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" \
+TASK_CODE="$(curl -s -o "$WORK/task.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" \
   -H 'Content-Type: application/json' \
   -d '{"kind":"probe.collect_now","args":{}}')"
 TASK_STATUS="$(cat "$WORK/task.json" | jget 'result.status' 2>/dev/null || echo '?')"
@@ -145,7 +165,7 @@ else
 fi
 
 head_ "8. 非白名单任务被拒"
-REJ_CODE="$(curl -s -o "$WORK/rej.json" -w '%{http_code}' -b "$COOKIE" -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" \
+REJ_CODE="$(curl -s -o "$WORK/rej.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" \
   -H 'Content-Type: application/json' \
   -d '{"kind":"shell.exec","args":{"cmd":"id"}}')"
 [[ "$REJ_CODE" == "400" ]] && ok "shell.exec 被拒（HTTP 400）" || bad "任意命令未被拒绝（HTTP $REJ_CODE）"

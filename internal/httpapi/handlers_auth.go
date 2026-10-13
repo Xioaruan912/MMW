@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -78,7 +79,7 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 		mapError(s.log, w, err, "setup/init create")
 		return
 	}
-	s.store.Audit(ctx, "setup.init", u.Username, u.ID, "初始化管理员", clientIP(r))
+	s.store.Audit(ctx, "setup.init", u.Username, u.ID, "初始化管理员", s.clientIP(r))
 
 	// 初始化成功直接签发会话，省去一次登录
 	if err := s.issueSession(w, r, u); err != nil {
@@ -100,6 +101,8 @@ type loginReq struct {
 // handleLogin 校验口令并签发会话 cookie。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	ip := s.clientIP(r)
+
 	var req loginReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad_request", "请求体解析失败")
@@ -107,10 +110,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Username = strings.TrimSpace(req.Username)
 
+	// 防爆破：先看是否已被锁定
+	if ok, remain := s.limiter.Check(ip, req.Username); !ok {
+		s.store.Audit(ctx, storage.AuditLoginLocked, req.Username, "",
+			fmt.Sprintf("登录被锁定，剩余 %s", remain.Round(time.Second)), ip)
+		w.Header().Set("Retry-After", itoa(int(remain.Seconds())+1))
+		writeErr(w, http.StatusTooManyRequests, "too_many_attempts",
+			fmt.Sprintf("尝试过于频繁，请 %s 后再试", remain.Round(time.Second)))
+		return
+	}
+
 	u, err := s.store.GetUserByUsername(ctx, req.Username)
 	if err != nil || !auth.VerifyPassword(u.PasswordHash, req.Password) {
 		// 不区分"用户不存在"与"口令错误"，避免账号枚举
-		s.store.Audit(ctx, storage.AuditLoginFail, req.Username, "", "登录失败", clientIP(r))
+		s.limiter.Fail(ip, req.Username)
+		s.store.Audit(ctx, storage.AuditLoginFail, req.Username, "", "登录失败", ip)
 		writeErr(w, http.StatusUnauthorized, "invalid_credentials", "用户名或密码错误")
 		return
 	}
@@ -122,7 +136,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		mapError(s.log, w, err, "login session")
 		return
 	}
-	s.store.Audit(ctx, storage.AuditLoginOK, u.Username, u.ID, "", clientIP(r))
+	s.limiter.Success(ip, req.Username)
+	s.store.Audit(ctx, storage.AuditLoginOK, u.Username, u.ID, "", ip)
 	writeJSON(w, http.StatusOK, map[string]any{"user": publicUser(u)})
 }
 
@@ -135,6 +150,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Name: SessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
+	setCSRFCookie(w, "", strings.HasPrefix(s.cfg.BaseURL(), "https://"), -1)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -159,18 +175,26 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u storage.
 		return err
 	}
 	if err := s.store.CreateSession(r.Context(), auth.HashToken(token), u.ID,
-		r.UserAgent(), clientIP(r), s.cfg.SessionTTL); err != nil {
+		r.UserAgent(), s.clientIP(r), s.cfg.SessionTTL); err != nil {
 		return err
 	}
+	secure := strings.HasPrefix(s.cfg.BaseURL(), "https://")
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookie,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   strings.HasPrefix(s.cfg.BaseURL(), "https://"),
+		Secure:   secure,
 		Expires:  time.Now().Add(s.cfg.SessionTTL),
 	})
+
+	// 同时下发 CSRF 令牌（double-submit cookie，前端需读取并回填请求头）
+	csrf, err := newCSRFToken()
+	if err != nil {
+		return err
+	}
+	setCSRFCookie(w, csrf, secure, int(s.cfg.SessionTTL.Seconds()))
 	return nil
 }
 
