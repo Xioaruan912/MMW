@@ -252,6 +252,71 @@ else
   bad "Agent 未写出配置文件: $CFG_FILE"
 fi
 
+head_ "7c2. Xray 内核安装（本地镜像，离线可复现）"
+export WORK
+python3 - <<'PY'
+import os, zipfile
+work = os.environ['WORK']
+dst = os.path.join(work, 'mirror', 'v99.0.0')
+os.makedirs(dst, exist_ok=True)
+with zipfile.ZipFile(os.path.join(dst, 'Xray-linux-64.zip'), 'w') as z:
+    z.writestr('xray', '#!/bin/sh\necho "Xray 99.0.0 (MMX e2e fake)"\n')
+    z.writestr('geoip.dat', b'\0' * 1024)
+    z.writestr('geosite.dat', b'\0' * 1024)
+PY
+ZIP_SHA="$(sha256sum "$WORK/mirror/v99.0.0/Xray-linux-64.zip" | cut -d' ' -f1)"
+
+MIRROR_PORT=18990
+( cd "$WORK/mirror" && python3 -m http.server "$MIRROR_PORT" --bind 127.0.0.1 >/dev/null 2>&1 & echo $! > "$WORK/mirror.pid" )
+sleep 1
+curl -sf -o /dev/null "http://127.0.0.1:$MIRROR_PORT/v99.0.0/Xray-linux-64.zip" \
+  && ok "本地镜像已就绪（$MIRROR_PORT）" || bad "本地镜像未启动"
+
+INSTALL_CODE="$(curl -s -o "$WORK/install-xray.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" -H 'Content-Type: application/json' -d "{
+    \"kind\": \"xray.install\",
+    \"args\": {
+      \"mode\": \"external\",
+      \"version\": \"99.0.0\",
+      \"base_url\": \"http://127.0.0.1:$MIRROR_PORT\",
+      \"sha256\": \"$ZIP_SHA\",
+      \"asset_dir\": \"$WORK/agent/xray-assets\"
+    }
+  }")"
+INSTALL_STATUS="$(cat "$WORK/install-xray.json" | jget 'result.status' 2>/dev/null || echo '?')"
+[[ "$INSTALL_CODE" == "200" && "$INSTALL_STATUS" == "ok" ]] \
+  && ok "xray.install 执行成功" \
+  || bad "xray.install 失败 HTTP $INSTALL_CODE: $(head -c 400 "$WORK/install-xray.json")"
+
+XRAY_BIN="$WORK/no-such-xray-binary"
+if [[ -x "$XRAY_BIN" ]]; then
+  ok "Xray 二进制已安装且可执行（$(stat -c %s "$XRAY_BIN") 字节）"
+  "$XRAY_BIN" >/dev/null 2>&1 && ok "二进制可运行，版本输出: $("$XRAY_BIN")" || bad "二进制无法运行"
+else
+  bad "Xray 二进制未安装到 $XRAY_BIN"
+fi
+[[ -f "$WORK/agent/xray-assets/geoip.dat" ]] && ok "geoip.dat 已落盘" || bad "geoip.dat 缺失"
+[[ -f "$WORK/agent/xray-assets/geosite.dat" ]] && ok "geosite.dat 已落盘" || bad "geosite.dat 缺失"
+
+# 负例：sha256 不匹配必须拒绝，且不得覆盖已装二进制
+BAD_CODE="$(curl -s -o "$WORK/install-bad.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" -H 'Content-Type: application/json' -d "{
+    \"kind\": \"xray.install\",
+    \"args\": {
+      \"mode\": \"external\",
+      \"version\": \"99.0.0\",
+      \"base_url\": \"http://127.0.0.1:$MIRROR_PORT\",
+      \"sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\"
+    }
+  }")"
+BAD_STATUS="$(cat "$WORK/install-bad.json" | jget 'result.status' 2>/dev/null || echo '?')"
+[[ "$BAD_STATUS" == "failed" ]] && ok "sha256 不匹配时安装被拒（status=failed）" \
+  || bad "sha256 校验未生效: HTTP $BAD_CODE status=$BAD_STATUS"
+grep -q "sha256 校验失败" "$WORK/install-bad.json" && ok "错误信息明确指出 sha256 校验失败" \
+  || bad "错误信息不明确"
+
+kill "$(cat "$WORK/mirror.pid" 2>/dev/null)" 2>/dev/null || true
+
 head_ "7d. 订阅输出"
 SUB_CODE="$(curl -s -o "$WORK/sub-clash.yaml" -w '%{http_code}' -A 'clash-verge/1.7' "$BASE/sub/$SUB_TOKEN")"
 [[ "$SUB_CODE" == "200" ]] && ok "Clash 订阅 200" || bad "Clash 订阅 HTTP $SUB_CODE"

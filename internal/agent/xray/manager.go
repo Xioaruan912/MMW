@@ -9,6 +9,7 @@
 package xray
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -32,6 +33,8 @@ type Manager interface {
 	ApplyConfig(cfg *agentproto.XrayConfig, rev string) error
 	// Control 执行 start / stop / restart。
 	Control(action string) error
+	// Install 下载并安装 Xray 内核。
+	Install(ctx context.Context, opts InstallOptions) (InstallResult, error)
 	// Uninstall 卸载。
 	Uninstall() error
 }
@@ -57,6 +60,8 @@ type ExternalManager struct {
 	BinPath   string
 	ConfigDir string
 	Service   string
+	// DownloadBase 为空时用 DefaultDownloadBase；可指向自建镜像。
+	DownloadBase string
 }
 
 // NewExternal 构造 external 模式的 Manager。
@@ -200,6 +205,11 @@ func (m *EmbeddedManager) ApplyConfig(*agentproto.XrayConfig, string) error {
 	return ErrNotImplemented
 }
 
+// Install 尚未实现。
+func (m *EmbeddedManager) Install(context.Context, InstallOptions) (InstallResult, error) {
+	return InstallResult{}, ErrNotImplemented
+}
+
 // Control 尚未实现。
 func (m *EmbeddedManager) Control(string) error { return ErrNotImplemented }
 
@@ -221,6 +231,11 @@ func (m *NoopManager) Status() Status { return Status{} }
 
 // ApplyConfig 忽略配置。
 func (m *NoopManager) ApplyConfig(*agentproto.XrayConfig, string) error { return nil }
+
+// Install 无操作。
+func (m *NoopManager) Install(context.Context, InstallOptions) (InstallResult, error) {
+	return InstallResult{}, errors.New("xray_mode=none 的节点不支持安装 Xray")
+}
 
 // Control 忽略控制。
 func (m *NoopManager) Control(string) error { return nil }

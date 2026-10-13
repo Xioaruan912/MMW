@@ -110,7 +110,7 @@ type taskSpec struct {
 
 // taskSpecs 是任务白名单表。新增任务必须同时在这里登记，否则一律拒绝。
 var taskSpecs = map[string]taskSpec{
-	TaskXrayInstall:      {Required: []string{"mode"}, Timeout: 3 * time.Minute},
+	TaskXrayInstall:      {Required: []string{"mode"}, Timeout: 10 * time.Minute},
 	TaskXrayApplyConfig:  {Required: []string{"config", "rev"}, Timeout: 60 * time.Second},
 	TaskXrayStart:        {Timeout: 30 * time.Second},
 	TaskXrayStop:         {Timeout: 30 * time.Second},

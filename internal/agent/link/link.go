@@ -438,8 +438,34 @@ func (c *Client) runTask(task agentproto.TaskPayload) (string, agentproto.RawArg
 		st := c.xrayMgr.Status()
 		return "配置已应用", agentproto.RawArgs{"rev": st.ConfigRev, "running": st.Running}, nil
 
-	case agentproto.TaskXrayInstall, agentproto.TaskXrayUninstall,
-		agentproto.TaskNginxInstall, agentproto.TaskNginxUninstall:
+	case agentproto.TaskXrayInstall:
+		mode := task.Args.GetString("mode")
+		if mode == "embedded" && c.xrayMgr.Mode() != "embedded" {
+			return "", nil, errors.New("当前 Agent 以 external 模式运行，无法切换到内嵌模式（需重新安装 Agent）")
+		}
+		if mode == "embedded" {
+			return "", nil, xray.ErrNotImplemented
+		}
+		res, err := c.xrayMgr.Install(context.Background(), xray.InstallOptions{
+			Version:  task.Args.GetString("version"),
+			BaseURL:  task.Args.GetString("base_url"),
+			SHA256:   task.Args.GetString("sha256"),
+			AssetDir: task.Args.GetString("asset_dir"),
+		})
+		if err != nil {
+			return "", nil, err
+		}
+		out := fmt.Sprintf("Xray %s 已安装\n  二进制: %s\n  geo 数据: %s\n  服务托管: %s\n  sha256: %s\n  已启动: %v",
+			res.Version, res.BinaryPath, res.AssetDir, res.ServiceMode, res.SHA256, res.Started)
+		return out, agentproto.RawArgs{
+			"version": res.Version, "sha256": res.SHA256,
+			"service_mode": res.ServiceMode, "started": res.Started,
+		}, nil
+
+	case agentproto.TaskXrayUninstall:
+		return "", nil, c.xrayMgr.Uninstall()
+
+	case agentproto.TaskNginxInstall, agentproto.TaskNginxUninstall:
 		return "", nil, xray.ErrNotImplemented
 
 	case agentproto.TaskProbeCollectNow:
