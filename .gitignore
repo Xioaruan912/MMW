@@ -1,3 +1,8 @@
+# 开发辅助（本机工作流，不进仓库）
+.dev/
+scripts/
+tests/_*.sh
+
 # 构建产物
 bin/
 dist/

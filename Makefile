@@ -62,7 +62,7 @@ lint: ## golangci-lint（需自行安装）
 	golangci-lint run ./...
 
 e2e: build ## 端到端联调
-	bash scripts/e2e.sh
+	bash tests/e2e.sh
 
 run-master: master ## 本地起主控（数据在 ./data）
 	MMX_DATA_DIR=./data MMX_LISTEN=127.0.0.1:12889 ./$(BIN)/mmx-master
@@ -79,7 +79,7 @@ docker-smoke: docker ## 构建并冒烟测试容器（起容器 → 查健康检
 	@for i in $$(seq 1 30); do 	  if curl -fsS http://127.0.0.1:12899/api/health >/dev/null 2>&1; then 	    echo "  健康检查通过"; docker rm -f mmx-smoke >/dev/null; exit 0; fi; 	  sleep 1; 	done; 	echo "  容器未就绪，日志："; docker logs mmx-smoke; docker rm -f mmx-smoke >/dev/null; exit 1
 
 shellcheck: ## 检查 shell 脚本
-	shellcheck -S warning deploy/*.sh scripts/*.sh
+	shellcheck -S warning install.sh deploy/*.sh tests/*.sh
 
 clean: ## 清理产物
 	rm -rf $(BIN) web/dist

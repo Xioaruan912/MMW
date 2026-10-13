@@ -21,7 +21,7 @@
 
 | 资源 | 说明 |
 |---|---|
-| [../deploy/install-master.sh](../deploy/install-master.sh) | 主控一键安装（依赖自举 + sha256 校验 + systemd + 冒烟测试） |
+| [../install.sh](../install.sh) | 一键安装（Docker） |
 | [../deploy/nginx.conf.example](../deploy/nginx.conf.example) | 反向代理示例（含 WebSocket 与订阅出口的特殊处理） |
 | [../docker-compose.yml](../docker-compose.yml) | Docker 部署 |
 | Agent 安装 | 面板「服务管理 → 添加服务器」生成的一键命令（内嵌一次性令牌） |
@@ -38,7 +38,7 @@ make agent-all     # 交叉编译各平台 Agent
 工作纪律（摘自 ROADMAP）：
 
 1. 每个阶段必须能 `make check` 通过才能进入下一阶段
-2. 新功能必须配端到端断言（`scripts/e2e*.sh`），不做"只写不验"
+2. 新功能必须配端到端断言（`tests/e2e.sh`），不做"只写不验"
 3. 协议变更必须同步改 `docs/AGENT-PROTOCOL.md` 与 `pkg/agentproto`
 4. 提交信息用 `feat(scope): ...` / `fix(scope): ...`
 
