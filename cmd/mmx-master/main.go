@@ -21,9 +21,11 @@ import (
 	"time"
 
 	"github.com/mmx-project/mmx/internal/agentlink"
+	"github.com/mmx-project/mmx/internal/backup"
 	"github.com/mmx-project/mmx/internal/config"
 	"github.com/mmx-project/mmx/internal/httpapi"
 	"github.com/mmx-project/mmx/internal/logging"
+	"github.com/mmx-project/mmx/internal/notify"
 	"github.com/mmx-project/mmx/internal/probe"
 	"github.com/mmx-project/mmx/internal/storage"
 	"github.com/mmx-project/mmx/internal/traffic"
@@ -110,6 +112,24 @@ func run() error {
 	go sweeper.Run(ctx)
 
 	probeSvc := probe.NewService(store, hub.IsOnline)
+	notifier := notify.New(store, log)
+	backupMgr := backup.NewManager(db.DB, cfg.DataDir, cfg.DatabaseDriver)
+
+	// 启动时应用待恢复的数据库（备份恢复不在运行时原地替换，见 internal/backup）
+	if applied, err := backup.ApplyPendingRestore(cfg.DataDir, cfg.DatabaseDSN); err != nil {
+		return fmt.Errorf("应用待恢复数据库失败: %w", err)
+	} else if applied {
+		log.Warn("已应用待恢复的数据库备份，旧库已留档")
+	}
+
+	// 通知钩子：服务器上下线、任务失败
+	hub.OnConnect = func(serverID string) {
+		notifier.Notify(ctx, notify.Event{
+			Kind: notify.EventServerOnline, Level: "info",
+			Title: "服务器已上线", Message: "服务器 " + serverID + " 的 Agent 已接入",
+			ServerID: serverID, Timestamp: time.Now(),
+		})
+	}
 
 	api := httpapi.New(httpapi.Options{
 		Log:            log,
@@ -118,6 +138,8 @@ func run() error {
 		Hub:            hub,
 		Xray:           xrayctl.NewApplier(store, hub, xrayctl.DefaultOptions()),
 		Probe:          probeSvc,
+		Notifier:       notifier,
+		Backup:         backupMgr,
 		Config:         cfg,
 		AgentBinaryDir: os.Getenv("MMX_AGENT_BINARY_DIR"),
 		WebFS:          webui.FS(), // 前端 embed 进二进制；未构建时为占位页

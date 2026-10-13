@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/mmx-project/mmx/internal/agentlink"
+	"github.com/mmx-project/mmx/internal/backup"
 	"github.com/mmx-project/mmx/internal/config"
+	"github.com/mmx-project/mmx/internal/notify"
 	"github.com/mmx-project/mmx/internal/probe"
 	"github.com/mmx-project/mmx/internal/storage"
 	"github.com/mmx-project/mmx/internal/xrayctl"
@@ -20,6 +22,8 @@ type Options struct {
 	Hub            *agentlink.Hub
 	Xray           *xrayctl.Applier
 	Probe          *probe.Service
+	Notifier       *notify.Notifier
+	Backup         *backup.Manager
 	Config         config.MasterConfig
 	AgentBinaryDir string // Agent 二进制库存目录；为空则 /api/remote/agent/* 返回 404
 	WebFS          fs.FS  // 内嵌前端（可选）
@@ -35,6 +39,8 @@ type Server struct {
 	hub            *agentlink.Hub
 	xray           *xrayctl.Applier
 	probe          *probe.Service
+	notifier       *notify.Notifier
+	backup         *backup.Manager
 	cfg            config.MasterConfig
 	agentBinaryDir string
 	webFS          fs.FS
@@ -55,6 +61,8 @@ func New(o Options) *Server {
 		hub:            o.Hub,
 		xray:           o.Xray,
 		probe:          o.Probe,
+		notifier:       o.Notifier,
+		backup:         o.Backup,
 		cfg:            o.Config,
 		agentBinaryDir: o.AgentBinaryDir,
 		webFS:          o.WebFS,

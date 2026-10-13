@@ -14,18 +14,18 @@ import (
 
 // Settings 是探针的外观与行为配置（落 system_settings 的 probe.settings）。
 type Settings struct {
-	Enabled        bool   `json:"enabled"`
-	Title          string `json:"title"`
-	Logo           string `json:"logo"`
-	Description    string `json:"description"`
-	Theme          string `json:"theme"`      // auto / light / dark
-	ColorMode      string `json:"color_mode"` // light / dark
-	Revision       int    `json:"revision"`   // 外观版本号，前端据此判断是否要重绘
-	BlockLogin     bool   `json:"block_login"`
-	ShowName       bool   `json:"show_name"`
-	ShowGlobe      bool   `json:"show_globe"`
-	ShowFooter     bool   `json:"show_footer"`
-	RequireToken   bool   `json:"require_token"`
+	Enabled      bool   `json:"enabled"`
+	Title        string `json:"title"`
+	Logo         string `json:"logo"`
+	Description  string `json:"description"`
+	Theme        string `json:"theme"`      // auto / light / dark
+	ColorMode    string `json:"color_mode"` // light / dark
+	Revision     int    `json:"revision"`   // 外观版本号，前端据此判断是否要重绘
+	BlockLogin   bool   `json:"block_login"`
+	ShowName     bool   `json:"show_name"`
+	ShowGlobe    bool   `json:"show_globe"`
+	ShowFooter   bool   `json:"show_footer"`
+	RequireToken bool   `json:"require_token"`
 	// Token 是独立存储的（见 TokenKey），此处仅为运行期载体，不随配置序列化。
 	Token          string `json:"-"`
 	RefreshSeconds int    `json:"refresh_seconds"`

@@ -222,6 +222,22 @@ func (db *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrationV7SQL 是公告。
+const migrationV7SQL = `
+CREATE TABLE IF NOT EXISTS announcements (
+    id         TEXT PRIMARY KEY,
+    title      TEXT NOT NULL DEFAULT '',
+    content    TEXT NOT NULL DEFAULT '',
+    level      TEXT NOT NULL DEFAULT 'info',   -- info | warning | important
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    pinned     INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_enabled ON announcements(enabled, created_at);
+`
+
 // migrationV6SQL 是通用设置表与服务器展示字段（探针/品牌等都要用）。
 const migrationV6SQL = `
 -- 通用键值设置。品牌、探针、通知等配置都落这里，避免每加一个功能就加一张表。
@@ -326,6 +342,11 @@ func init() {
 		Version: 6,
 		Name:    "system_settings_and_server_display",
 		SQL:     migrationV6SQL,
+	})
+	migrations = append(migrations, migration{
+		Version: 7,
+		Name:    "announcements",
+		SQL:     migrationV7SQL,
 	})
 }
 

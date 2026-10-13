@@ -29,6 +29,9 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/agent/ws", s.hub.HandleWS)
 	r.Post("/api/agent/pull", s.handleAgentPull)
 
+	// ---- 公开公告（登录页可用）----
+	r.Get("/api/public/announcements", s.handlePublicAnnouncements)
+
 	// ---- 探针（公开，可开关 + 可选令牌保护）----
 	r.Get("/api/public/probe-servers", s.handleProbeServers)
 	r.Get("/api/public/probe-ws", s.handleProbeWS)
@@ -59,6 +62,7 @@ func (s *Server) Routes() http.Handler {
 		pr.Post("/api/me/totp/enable", s.handleTOTPEnable)
 		pr.Post("/api/me/totp/disable", s.handleTOTPDisable)
 		pr.Get("/api/me/traffic", s.handleMyTraffic)
+		pr.Get("/api/me/announcements", s.handleMyAnnouncements)
 		pr.Get("/api/me/tokens", s.handleListAPITokens)
 		pr.Post("/api/me/tokens", s.handleCreateAPIToken)
 		pr.Delete("/api/me/tokens/{id}", s.handleRevokeAPIToken)
@@ -118,6 +122,21 @@ func (s *Server) Routes() http.Handler {
 
 		// ---- 服务器展示信息 ----
 		pr.Patch("/api/admin/servers/{id}/display", s.handleUpdateServerDisplay)
+
+		// ---- 通知 ----
+		pr.Get("/api/admin/notify/settings", s.handleGetNotifySettings)
+		pr.Put("/api/admin/notify/settings", s.handlePutNotifySettings)
+		pr.Post("/api/admin/notify/test", s.handleTestNotify)
+
+		// ---- 公告 ----
+		pr.Get("/api/admin/announcements", s.handleListAnnouncements)
+		pr.Post("/api/admin/announcements", s.handleCreateAnnouncement)
+		pr.Patch("/api/admin/announcements/{id}", s.handleUpdateAnnouncement)
+		pr.Delete("/api/admin/announcements/{id}", s.handleDeleteAnnouncement)
+
+		// ---- 备份 / 恢复 ----
+		pr.Get("/api/admin/backup/download", s.handleBackupDownload)
+		pr.Post("/api/admin/backup/restore", s.handleBackupRestore)
 	})
 
 	// ---- 前端静态资源 ----

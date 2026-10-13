@@ -453,6 +453,79 @@ curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X PUT "$BASE/api/adm
 CLOSED2="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Mmwx-Probe-Token: $PROBE_TOKEN" "$BASE/api/public/probe-servers")"
 [[ "$CLOSED2" == "404" ]] && ok "关闭后可访问性立即收回" || bad "关闭后仍可访问: $CLOSED2"
 
+head_ "7d4. 公告 / 通知 / 备份恢复"
+# ---- 公告 ----
+ANN_CODE="$(curl -s -o "$WORK/ann.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/announcements" -H 'Content-Type: application/json' \
+  -d '{"title":"维护通知","content":"今晚 02:00 例行维护","level":"warning","pinned":true}')"
+ANN_ID="$(cat "$WORK/ann.json" | jget announcement.id 2>/dev/null || echo '')"
+[[ "$ANN_CODE" == "201" && -n "$ANN_ID" ]] && ok "公告已创建" || bad "创建公告失败 HTTP $ANN_CODE: $(head -c 200 "$WORK/ann.json")"
+
+PUB_CODE="$(curl -s -o "$WORK/ann-pub.json" -w '%{http_code}' "$BASE/api/public/announcements")"
+[[ "$PUB_CODE" == "200" ]] && ok "公开公告接口 200" || bad "公开公告 HTTP $PUB_CODE"
+grep -q '维护通知' "$WORK/ann-pub.json" && ok "公开公告含刚创建的条目" || bad "公开公告未包含新条目"
+
+# 非法 level 必须被拒
+BAD_LVL="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/announcements" -H 'Content-Type: application/json' \
+  -d '{"title":"x","level":"critical"}')"
+[[ "$BAD_LVL" == "400" ]] && ok "非法公告级别被拒（400）" || bad "非法级别未校验: $BAD_LVL"
+
+# 停用后公开接口不应再出现
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X PATCH "$BASE/api/admin/announcements/$ANN_ID" \
+  -H 'Content-Type: application/json' -d '{"enabled":false}'
+curl -s -o "$WORK/ann-pub2.json" "$BASE/api/public/announcements"
+grep -q '维护通知' "$WORK/ann-pub2.json" && bad "停用后仍对公开展示" || ok "停用后立即从公开接口消失"
+
+# ---- 通知 ----
+NS_CODE="$(curl -s -o "$WORK/notify.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/notify/settings")"
+[[ "$NS_CODE" == "200" ]] && ok "通知设置可读" || bad "通知设置 HTTP $NS_CODE"
+grep -q '"enabled":false' "$WORK/notify.json" && ok "通知默认全关闭" || bad "通知默认应为关闭"
+
+PUT_N="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X PUT "$BASE/api/admin/notify/settings" -H 'Content-Type: application/json' \
+  -d '{"telegram":{"enabled":false},"webhook":{"enabled":false,"url":"https://example.com/hook","secret":"s3cr3t"},"dedup_window_seconds":120}')"
+[[ "$PUT_N" == "200" ]] && ok "通知设置已保存" || bad "保存通知设置失败 HTTP $PUT_N"
+
+# 敏感字段不回显
+curl -s -o "$WORK/notify2.json" -b "$COOKIE" "$BASE/api/admin/notify/settings"
+grep -q 's3cr3t' "$WORK/notify2.json" && bad "Webhook 密钥被回显（应隐藏）" || ok "Webhook 密钥不回显"
+grep -q '"has_webhook_secret":true' "$WORK/notify2.json" && ok "以 has_* 字段告知已配置" || bad "缺少 has_webhook_secret 标记"
+
+# 未启用任何通道时测试通知应明确失败
+TEST_N="$(curl -s -o "$WORK/notify-test.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/notify/test")"
+[[ "$TEST_N" == "502" ]] && ok "未启用通道时测试通知明确失败（502）" || bad "测试通知应失败，实得 $TEST_N"
+
+# ---- 备份 / 恢复 ----
+BK_CODE="$(curl -s -o "$WORK/backup.zip" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/backup/download")"
+[[ "$BK_CODE" == "200" ]] && ok "备份下载 200" || bad "备份下载 HTTP $BK_CODE"
+python3 - "$WORK/backup.zip" <<'PY' && ok "备份包结构合法（含 manifest 与 SQLite 数据库）" || bad "备份包结构异常"
+import sys, zipfile, json
+z = zipfile.ZipFile(sys.argv[1])
+names = z.namelist()
+assert 'manifest.json' in names, names
+assert 'mmx.db' in names, names
+m = json.loads(z.read('manifest.json'))
+assert m['app'] == 'mmx', m
+assert z.read('mmx.db')[:15] == b'SQLite format 3', '数据库魔数不对'
+assert m['tables'].get('users', 0) >= 1, f"表计数异常: {m.get('tables')}"
+PY
+
+# 伪造备份包必须被拒
+echo "not a zip" > "$WORK/bad-backup.zip"
+BAD_BK="$(curl -s -o "$WORK/bad-backup-resp.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/backup/restore" --data-binary "@$WORK/bad-backup.zip" \
+  -H 'Content-Type: application/octet-stream')"
+[[ "$BAD_BK" == "400" ]] && ok "非 zip 备份包被拒（400）" || bad "伪造备份包未被拒: $BAD_BK"
+
+# 真实的备份包可以恢复（落成待应用文件，要求重启）
+RST_CODE="$(curl -s -o "$WORK/restore.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/backup/restore" --data-binary "@$WORK/backup.zip" \
+  -H 'Content-Type: application/octet-stream')"
+[[ "$RST_CODE" == "202" ]] && ok "合法备份包被接受（202，要求重启生效）" || bad "恢复失败 HTTP $RST_CODE: $(head -c 200 "$WORK/restore.json")"
+grep -q '"restart_required":true' "$WORK/restore.json" && ok "明确告知需要重启" || bad "未告知需要重启"
+
 head_ "7e. 任务持久化与 Pull 降级通道"
 TASKS_CODE="$(curl -s -o "$WORK/tasks.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/tasks?server_id=$SERVER_ID")"
 TASKS_N="$(cat "$WORK/tasks.json" | jget total 2>/dev/null || echo 0)"
