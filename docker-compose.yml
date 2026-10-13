@@ -1,0 +1,40 @@
+# MMX 单机部署（主控 + SQLite）
+#
+#   docker compose up -d
+#   浏览器打开 http://127.0.0.1:12889/ 完成初始化
+#
+# 需要 Agent 的节点机上，用同一个镜像跑 mmx-agent 即可：
+#   docker run -d --name mmx-agent --restart unless-stopped \
+#     -e MMX_MASTER_URL=https://panel.example.com \
+#     -e MMX_ENROLL_TOKEN=<面板生成的一次性令牌> \
+#     -e MMX_AGENT_STATE_DIR=/data \
+#     -v mmx-agent-data:/data mmx:dev mmx-agent
+services:
+  mmx:
+    build:
+      context: .
+      args:
+        VERSION: ${MMX_VERSION:-dev}
+    image: mmx:${MMX_VERSION:-dev}
+    container_name: mmx
+    restart: unless-stopped
+    ports:
+      - "${MMX_PORT:-12889}:12889"
+    environment:
+      # 对外基址：生成 Agent 安装命令时用。反代场景务必设置成公网域名。
+      MMX_PUBLIC_URL: ${MMX_PUBLIC_URL:-}
+      # 在反向代理之后部署时打开，才会采信 X-Forwarded-For
+      MMX_TRUST_PROXY: ${MMX_TRUST_PROXY:-0}
+      MMX_DEBUG: ${MMX_DEBUG:-0}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 唯一需要备份的目录：数据库 + 主控密钥
+      - mmx-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:12889/api/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  mmx-data:

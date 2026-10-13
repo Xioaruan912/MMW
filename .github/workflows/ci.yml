@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: 后端（build / vet / test）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: gofmt 检查
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal ./pkg)
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未格式化："
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
+
+      # 前端产物是 embed 的目标；不构建的话 go build 会用到仓库里的占位页，
+      # 这样测出来的二进制与真实交付物不一致。
+      - name: 准备前端产物
+        run: mkdir -p web/dist/assets
+
+      - name: 编译主控与 Agent
+        run: make build
+
+  frontend:
+    name: 前端（typecheck / build）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装依赖
+        working-directory: web
+        run: |
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
+          else npm install --no-audit --no-fund; fi
+
+      - name: 构建（含 tsc 类型检查）
+        working-directory: web
+        run: npm run build
+
+      - name: 确认产物存在
+        run: |
+          test -f web/dist/index.html || { echo "缺少 web/dist/index.html"; exit 1; }
+          ls -la web/dist
+
+  e2e:
+    name: 端到端（主控 + Agent）
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 构建前端
+        working-directory: web
+        run: |
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
+          else npm install --no-audit --no-fund; fi
+          npm run build
+
+      - name: 端到端联调
+        run: make e2e
+
+  docker:
+    name: Docker 镜像可构建
+    runs-on: ubuntu-latest
+    needs: [backend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建镜像
+        run: docker build -t mmx:ci --build-arg VERSION=ci .
+      - name: 冒烟：容器能起来并响应健康检查
+        run: |
+          docker run -d --name mmx-ci -p 12899:12889 mmx:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:12899/api/health >/dev/null 2>&1; then
+              echo "健康检查通过"; docker logs mmx-ci; docker rm -f mmx-ci; exit 0
+            fi
+            sleep 1
+          done
+          echo "容器未就绪，日志："; docker logs mmx-ci; exit 1

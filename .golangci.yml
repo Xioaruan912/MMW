@@ -1,0 +1,42 @@
+# MMX 的静态检查配置
+#
+# 原则：只开真正能抓到问题的检查项。过度严格会让开发者习惯性忽略告警，
+# 反而失去检查的意义。
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck      # 未处理的 error
+    - govet         # 标准 vet
+    - ineffassign   # 无效赋值
+    - staticcheck   # 静态分析（含 SA 系列）
+    - unused        # 未使用的标识符
+    - misspell      # 拼写
+    - bodyclose     # HTTP 响应体未关闭
+    - rowserrcheck  # sql.Rows.Err 未检查
+    - errorlint     # error 比较方式
+    - gosec         # 常见安全问题
+
+linters-settings:
+  errcheck:
+    # 显式忽略这些常见且安全的返回值
+    exclude-functions:
+      - (io.Closer).Close
+      - (*os.File).Close
+      - fmt.Fprintf
+      - fmt.Fprintln
+  gosec:
+    excludes:
+      - G104  # 与 errcheck 重复
+      - G304  # 文件路径来自变量（本项目的备份/配置文件读取都是受控路径）
+
+issues:
+  exclude-rules:
+    # 测试文件放宽安全与错误检查
+    - path: _test\.go
+      linters: [gosec, errcheck]
+    # 生成的内置模板是长字符串常量，拼写检查无意义
+    - path: internal/ruleengine/builtin\.go
+      linters: [misspell]

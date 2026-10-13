@@ -1,34 +1,44 @@
-feat(P8): 自定义出站 / 路由规则 / 链式代理
+feat(P9): Docker / CI / 一键安装 / 文档索引
 
-数据层（迁移 v10）
-- outbounds 表：tag / protocol / settings / stream / proxy_tag（链式前置）/
-  send_through（绑定源地址）/ 排序
-- routing_rules 表：kind（domain/ip/port/inbound/protocol/source/user）/
-  values（JSON 数组）/ outbound_tag / 排序
-- DeleteOutbound 会拒绝删除仍被引用的出站（被规则引用或被其它出站作为链式前置）
+Docker
+- 多阶段构建：node 构建前端 -> golang 构建后端 -> alpine 运行
+- 前端产物在构建期覆盖占位页，确保 embed 进二进制的是真实前端
+- 依赖清单单独一层，源码改动不会导致重新下载依赖
+- 运行镜像 29 MB，非 root（uid 100），只挂载 /data
+- HEALTHCHECK 打 /api/health
+- docker-entrypoint.sh：校验数据目录可写后再启动
+  （否则 SQLite 会在用户走完初始化向导后才失败，报错时机很糟）
+- 容器内**不做任何隐式初始化**，首启初始化仍由面板向导完成
 
-配置生成（internal/xrayctl）
-- BuildInput 接受完整期望状态（入站 + 客户端 + 出站 + 路由规则）
-- **顺序即语义**，这一点在实现里写进了注释与测试：
-  * 自定义出站排在 direct/block 之前（它们会被规则或链式引用）
-  * 自定义路由规则排在内置 api/block 规则之前
-    —— Xray 按顺序匹配，把宽泛规则放前面会吃掉所有流量
-- 渲染前做三类引用完整性校验，任一不满足直接失败：
-  * 链式出站的前置必须存在且启用
-  * 路由规则指向的出站必须存在（direct/block 是内置的）
-  * 出站 tag 不能重复
-  这些校验的价值在于：**在构建阶段就暴露问题**，而不是把一份 Xray 起不来的配置
-  下发到 Agent 侧才炸 —— 那时错误出现在远端日志里，排障链路很长
+CI（.github/workflows/ci.yml）
+- 四个 job：后端（gofmt/vet/build/test -race）、前端（tsc+build）、
+  端到端（make e2e）、Docker（构建 + 起容器查健康检查）
+- 端到端跑在 CI 上，保证"每个新功能必须配端到端断言"这条纪律能被机器执行
 
-接口
-- GET/POST/PATCH/DELETE /api/admin/outbounds
-- GET/POST/PATCH/DELETE /api/admin/routing-rules
-- 创建链式出站但前置不存在时**不回滚**，只返回 warning：
-  用户可能打算稍后再建前置出站；但下发配置时会明确失败
+Release（.github/workflows/release.yml）
+- 主控 linux/amd64 + arm64；Agent 覆盖 linux/darwin/windows × amd64/arm64
+- 产出 checksums.txt，Release notes 自动生成
 
-测试
-- xrayctl 单测 11 组：出站基础/链式/坏 JSON/空 tag、
-  7 种规则类型映射、坏输入三种拒绝、
-  配置包含顺序正确、悬空链式引用拒绝、悬空规则出站拒绝、
-  重复 tag 拒绝、禁用项忽略、规则类型名稳定性
-- e2e 新增 12 项（181/181 通过）
+一键安装（deploy/install-master.sh）
+- 依赖自举：缺 curl 自动装（apt/apk/dnf/yum/pacman/zypper）
+- 自动解析最新版本；MMX_VERSION 可固定版本
+- sha256 校验（取官方 checksums.txt）+ ELF 魔数兜底校验
+- **冒烟测试通过后才注册 systemd**：避免装出一个 exit 127 的坏 unit
+- systemd unit 带加固项（NoNewPrivileges / ProtectSystem / ProtectHome / ReadWritePaths）
+- 交互提示走 stderr + read -t 兜底（管道执行时不会卡死）
+- 冒烟测试 cd 到临时目录，不污染当前工作目录
+
+配套
+- deploy/nginx.conf.example：WebSocket（Agent 网关 + 探针推送）显式透传 Upgrade，
+  订阅出口关闭缓冲与缓存，并说明 MMX_TRUST_PROXY 的必要性
+- docs/README.md：文档索引 + **关键设计决定表**（把散落在代码注释里的
+  "为什么这样做"汇总成一张表）
+- .golangci.yml：只开真正能抓到问题的检查项
+- THIRD_PARTY_NOTICES.md：逐项列出依赖与许可，并说明 MMX 不分发 Xray 二进制
+
+验证
+- docker build 通过，镜像 29 MB
+- 容器冒烟：健康检查 / setup status / 内嵌前端 / 订阅格式接口 / 数据目录 / 非 root 用户
+  全部正常
+- shellcheck 对 deploy/ 与 scripts/ 零告警
+- e2e 181/181

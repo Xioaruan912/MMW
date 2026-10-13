@@ -1,0 +1,108 @@
+# MMX 反向代理示例配置
+#
+#   /etc/nginx/conf.d/mmx.conf
+#
+# 设计要点：
+#   · 主控只监听 127.0.0.1，对外只暴露本机的 443
+#   · WebSocket（Agent 网关 / 探针推送）必须显式透传 Upgrade
+#   · 订阅下载与探针页可能被大量客户端拉取，关闭缓冲、放宽超时
+#   · MMX_TRUST_PROXY=1 时才采信 X-Forwarded-For，否则登录限流与
+#     Agent 令牌独占判定会全部退化到 127.0.0.1
+
+upstream mmx_backend {
+    server 127.0.0.1:12889;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name panel.example.com;
+    # ACME HTTP-01 校验与强制跳转 HTTPS
+    location /.well-known/acme-challenge/ {
+        root /var/www/acme;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name panel.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/panel.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # 备份上传可能较大
+    client_max_body_size 512m;
+
+    # 安全响应头（主控自身也会设一部分，这里补网络层）
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    # 静态资源（前端已 embed 进主控，这里只是让 nginx 直接返回以减少进程开销）
+    location /assets/ {
+        proxy_pass http://mmx_backend;
+        proxy_set_header Host $host;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # Agent 网关：WebSocket 长连接
+    location /api/agent/ws {
+        proxy_pass http://mmx_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Agent 心跳间隔通常 15s，超时给足余量
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+
+    # 探针实时推送：同样是 WebSocket
+    location /api/public/probe-ws {
+        proxy_pass http://mmx_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 3600s;
+        proxy_buffering off;
+    }
+
+    # 订阅出口：客户端高频拉取，不缓冲、不做长缓存
+    location /sub/ {
+        proxy_pass http://mmx_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+    }
+
+    # 其余 API
+    location / {
+        proxy_pass http://mmx_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+    }
+}

@@ -16,7 +16,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 PORT="${PORT:-18989}"
 BASE="http://127.0.0.1:${PORT}"
@@ -56,7 +56,7 @@ MMX_DATA_DIR="$WORK/data" MMX_LISTEN="127.0.0.1:$PORT" MMX_DEBUG=1 \
   ./bin/mmx-master > "$MASTER_LOG" 2>&1 &
 MASTER_PID=$!
 
-for i in $(seq 1 40); do
+for _ in $(seq 1 40); do
   if curl -fsS -m 2 "$BASE/api/health" >/dev/null 2>&1; then break; fi
   sleep 0.25
 done
@@ -123,7 +123,7 @@ grep -q "握手完成" "$AGENT_LOG" && ok "Agent 完成 WebSocket 握手" || { b
 
 head_ "6. 主控侧可见在线 + 指标"
 ONLINE="false"
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
   curl -s -b "$COOKIE" "$BASE/api/admin/servers" -o "$WORK/list.json"
   if [[ "$(cat "$WORK/list.json" | jget 'servers.0.online')" == "True" ]]; then ONLINE="true"; break; fi
   sleep 1
@@ -1119,7 +1119,7 @@ PY
 
 head_ "13. 登录防爆破（放在最后，避免 IP 级锁定影响其它登录用例）"
 LOCKED=""
-for i in $(seq 1 7); do
+for _ in $(seq 1 7); do
   code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" \
     -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-password"}')"
   if [[ "$code" == "429" ]]; then LOCKED="yes"; break; fi

@@ -18,7 +18,7 @@ LDFLAGS  := -s -w \
 
 BIN := bin
 
-.PHONY: all build master agent check vet test fmt tidy clean e2e web lint help
+.PHONY: all build master agent agent-all check vet test fmt tidy clean e2e web lint help docker docker-smoke shellcheck
 
 all: build
 
@@ -69,6 +69,17 @@ run-master: master ## 本地起主控（数据在 ./data）
 
 web: ## 构建前端（P9 起可用）
 	cd web && npm ci && npm run build
+
+docker: ## 构建 Docker 镜像
+	docker build -t mmx:$(VERSION) --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) .
+
+docker-smoke: docker ## 构建并冒烟测试容器（起容器 → 查健康检查）
+	@docker rm -f mmx-smoke >/dev/null 2>&1 || true
+	@docker run -d --name mmx-smoke -p 12899:12889 mmx:$(VERSION) >/dev/null
+	@for i in $$(seq 1 30); do 	  if curl -fsS http://127.0.0.1:12899/api/health >/dev/null 2>&1; then 	    echo "  健康检查通过"; docker rm -f mmx-smoke >/dev/null; exit 0; fi; 	  sleep 1; 	done; 	echo "  容器未就绪，日志："; docker logs mmx-smoke; docker rm -f mmx-smoke >/dev/null; exit 1
+
+shellcheck: ## 检查 shell 脚本
+	shellcheck -S warning deploy/*.sh scripts/*.sh
 
 clean: ## 清理产物
 	rm -rf $(BIN) web/dist

@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（例如 v0.1.0）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 构建前端（会被 embed 进二进制）
+        working-directory: web
+        run: |
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
+          else npm install --no-audit --no-fund; fi
+          npm run build
+
+      - name: 解析版本
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 交叉编译
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -e
+          LDFLAGS="-s -w \
+            -X github.com/mmx-project/mmx/internal/version.Version=${VERSION} \
+            -X github.com/mmx-project/mmx/internal/version.Commit=${COMMIT} \
+            -X github.com/mmx-project/mmx/internal/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist
+          # 主控只出 linux（它是服务端进程）；Agent 覆盖三类平台
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" \
+            -o dist/mmx-master-linux-amd64 ./cmd/mmx-master
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" \
+            -o dist/mmx-master-linux-arm64 ./cmd/mmx-master
+          for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os=${p%%/*}; arch=${p##*/}
+            ext=""; [ "$os" = "windows" ] && ext=".exe"
+            echo "  -> mmx-agent-${os}-${arch}${ext}"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$LDFLAGS" \
+              -o "dist/mmx-agent-${os}-${arch}${ext}" ./cmd/mmx-agent
+          done
+          ( cd dist && sha256sum * > checksums.txt )
+
+      - name: 发布
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## MMX ${{ steps.ver.outputs.version }}
+
+            ### 主控（服务端）
+            - `mmx-master-linux-amd64`
+            - `mmx-master-linux-arm64`
+
+            ### Agent（节点端）
+            - Linux / macOS / Windows × amd64 / arm64
+
+            ### 校验
+            ```
+            sha256sum -c checksums.txt
+            ```
+
+            一键安装：
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/deploy/install-master.sh | bash
+            ```

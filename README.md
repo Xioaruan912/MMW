@@ -36,7 +36,7 @@
 
 ### 环境要求
 
-- Go 1.24+
+- Go 1.26+
 - Linux（Master 与 Agent 都支持任意 Linux；Agent 采集依赖 `/proc`）
 
 ### 编译
