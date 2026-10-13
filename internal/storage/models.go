@@ -57,6 +57,18 @@ type Server struct {
 	LastError       string `json:"last_error"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
+
+	// 展示信息（探针页与列表页使用）
+	Region          string `json:"region"`            // 地区 Emoji
+	RegionCountry   string `json:"region_country"`    // 国家
+	RegionCity      string `json:"region_city"`       // 城市
+	ProviderName    string `json:"provider_name"`     // 服务商
+	ProviderURL     string `json:"provider_url"`      // 服务商网址
+	TelecomPaidPeer bool   `json:"telecom_paid_peer"` // 是否电信 163 Paid Peer
+	TrafficLimit    int64  `json:"traffic_limit"`     // 计费周期流量上限（0 = 不限）
+	PeriodStartDay  int    `json:"period_start_day"`  // 计费起始日（1-28）
+	ProbeVisible    bool   `json:"probe_visible"`     // 是否在探针页展示
+	Weight          int    `json:"weight"`            // 排序权重（越大越靠前）
 }
 
 // Online 按 last_seen 与心跳间隔判断是否在线。

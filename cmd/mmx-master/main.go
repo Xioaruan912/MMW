@@ -24,6 +24,7 @@ import (
 	"github.com/mmx-project/mmx/internal/config"
 	"github.com/mmx-project/mmx/internal/httpapi"
 	"github.com/mmx-project/mmx/internal/logging"
+	"github.com/mmx-project/mmx/internal/probe"
 	"github.com/mmx-project/mmx/internal/storage"
 	"github.com/mmx-project/mmx/internal/traffic"
 	"github.com/mmx-project/mmx/internal/version"
@@ -108,12 +109,15 @@ func run() error {
 	sweeper := agentlink.NewSweeper(log, reg, hub, 30*time.Second, 30*24*time.Hour)
 	go sweeper.Run(ctx)
 
+	probeSvc := probe.NewService(store, hub.IsOnline)
+
 	api := httpapi.New(httpapi.Options{
 		Log:            log,
 		Store:          store,
 		Reg:            reg,
 		Hub:            hub,
 		Xray:           xrayctl.NewApplier(store, hub, xrayctl.DefaultOptions()),
+		Probe:          probeSvc,
 		Config:         cfg,
 		AgentBinaryDir: os.Getenv("MMX_AGENT_BINARY_DIR"),
 		WebFS:          webui.FS(), // 前端 embed 进二进制；未构建时为占位页

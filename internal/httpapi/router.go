@@ -29,6 +29,11 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/agent/ws", s.hub.HandleWS)
 	r.Post("/api/agent/pull", s.handleAgentPull)
 
+	// ---- 探针（公开，可开关 + 可选令牌保护）----
+	r.Get("/api/public/probe-servers", s.handleProbeServers)
+	r.Get("/api/public/probe-ws", s.handleProbeWS)
+	r.Get("/api/public/probe-series", s.handleProbeSeries)
+
 	// ---- 订阅出口（公开，凭据即权限）----
 	r.Get("/sub/formats", s.handleSubscriptionFormats)
 	r.Get("/sub/{token}", s.handleSubscription)
@@ -105,6 +110,14 @@ func (s *Server) Routes() http.Handler {
 		pr.Post("/api/admin/users/{id}/sub-token", s.handleRotateSubToken)
 		pr.Get("/api/admin/users/{id}/traffic", s.handleUserTraffic)
 		pr.Get("/api/admin/traffic", s.handleTrafficSummary)
+
+		// ---- 探针设置 ----
+		pr.Get("/api/admin/probe/settings", s.handleGetProbeSettings)
+		pr.Put("/api/admin/probe/settings", s.handlePutProbeSettings)
+		pr.Post("/api/admin/probe/token", s.handleRotateProbeToken)
+
+		// ---- 服务器展示信息 ----
+		pr.Patch("/api/admin/servers/{id}/display", s.handleUpdateServerDisplay)
 	})
 
 	// ---- 前端静态资源 ----

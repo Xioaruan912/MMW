@@ -222,6 +222,28 @@ func (db *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrationV6SQL 是通用设置表与服务器展示字段（探针/品牌等都要用）。
+const migrationV6SQL = `
+-- 通用键值设置。品牌、探针、通知等配置都落这里，避免每加一个功能就加一张表。
+CREATE TABLE IF NOT EXISTS system_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+
+-- 服务器展示信息（探针页与列表页用）
+ALTER TABLE servers ADD COLUMN region             TEXT NOT NULL DEFAULT '';
+ALTER TABLE servers ADD COLUMN region_country     TEXT NOT NULL DEFAULT '';
+ALTER TABLE servers ADD COLUMN region_city        TEXT NOT NULL DEFAULT '';
+ALTER TABLE servers ADD COLUMN provider_name      TEXT NOT NULL DEFAULT '';
+ALTER TABLE servers ADD COLUMN provider_url       TEXT NOT NULL DEFAULT '';
+ALTER TABLE servers ADD COLUMN telecom_paid_peer  INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE servers ADD COLUMN traffic_limit      INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE servers ADD COLUMN period_start_day   INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE servers ADD COLUMN probe_visible      INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE servers ADD COLUMN weight             INTEGER NOT NULL DEFAULT 0;
+`
+
 // migrationV5SQL 是每用户日流量。
 const migrationV5SQL = `
 CREATE TABLE IF NOT EXISTS user_traffic_daily (
@@ -299,6 +321,11 @@ func init() {
 		Version: 5,
 		Name:    "user_traffic_daily",
 		SQL:     migrationV5SQL,
+	})
+	migrations = append(migrations, migration{
+		Version: 6,
+		Name:    "system_settings_and_server_display",
+		SQL:     migrationV6SQL,
 	})
 }
 

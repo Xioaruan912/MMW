@@ -329,3 +329,66 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		"uptime_sec":       int(time.Since(s.startedAt).Seconds()),
 	})
 }
+
+type updateServerDisplayReq struct {
+	Region          *string `json:"region"`
+	RegionCountry   *string `json:"region_country"`
+	RegionCity      *string `json:"region_city"`
+	ProviderName    *string `json:"provider_name"`
+	ProviderURL     *string `json:"provider_url"`
+	TelecomPaidPeer *bool   `json:"telecom_paid_peer"`
+	TrafficLimit    *int64  `json:"traffic_limit"`
+	PeriodStartDay  *int    `json:"period_start_day"`
+	ProbeVisible    *bool   `json:"probe_visible"`
+	Weight          *int    `json:"weight"`
+}
+
+// handleUpdateServerDisplay 更新服务器的展示信息（探针与列表页使用）。
+func (s *Server) handleUpdateServerDisplay(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	sv, err := s.store.GetServer(r.Context(), id)
+	if err != nil {
+		mapError(s.log, w, err, "update display get")
+		return
+	}
+	var req updateServerDisplayReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "请求体解析失败")
+		return
+	}
+	if req.Region != nil {
+		sv.Region = *req.Region
+	}
+	if req.RegionCountry != nil {
+		sv.RegionCountry = *req.RegionCountry
+	}
+	if req.RegionCity != nil {
+		sv.RegionCity = *req.RegionCity
+	}
+	if req.ProviderName != nil {
+		sv.ProviderName = *req.ProviderName
+	}
+	if req.ProviderURL != nil {
+		sv.ProviderURL = *req.ProviderURL
+	}
+	if req.TelecomPaidPeer != nil {
+		sv.TelecomPaidPeer = *req.TelecomPaidPeer
+	}
+	if req.TrafficLimit != nil {
+		sv.TrafficLimit = *req.TrafficLimit
+	}
+	if req.PeriodStartDay != nil {
+		sv.PeriodStartDay = *req.PeriodStartDay
+	}
+	if req.ProbeVisible != nil {
+		sv.ProbeVisible = *req.ProbeVisible
+	}
+	if req.Weight != nil {
+		sv.Weight = *req.Weight
+	}
+	if err := s.store.UpdateServerDisplay(r.Context(), sv); err != nil {
+		mapError(s.log, w, err, "update display")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"server": s.viewServer(r, sv, false)})
+}

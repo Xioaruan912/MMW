@@ -192,3 +192,55 @@ func (s *Store) GetUserQuota(ctx context.Context, userID string) (UserQuotaState
 	}
 	return st, nil
 }
+
+// ServerTrafficRange 汇总某台服务器在 [from, to) 区间的流量。
+//
+// 用于计费周期口径（探针页与账单），与「自然月」不同 —— 周期起点是用户配置的每月起始日。
+func (s *Store) ServerTrafficRange(ctx context.Context, serverID string, from, to time.Time) (TrafficSummary, error) {
+	out := TrafficSummary{Series: []TrafficPoint{}}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT day, up, down FROM traffic_daily
+          WHERE server_id=? AND day >= ? AND day < ? ORDER BY day ASC`,
+		serverID, dayKey(from), dayKey(to))
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p TrafficPoint
+		if err := rows.Scan(&p.Day, &p.Up, &p.Down); err != nil {
+			return out, err
+		}
+		out.Up += p.Up
+		out.Down += p.Down
+		out.Series = append(out.Series, p)
+	}
+	out.Total = out.Up + out.Down
+	out.Days = len(out.Series)
+	return out, rows.Err()
+}
+
+// UserTrafficRange 汇总某个用户在 [from, to) 区间的流量。
+func (s *Store) UserTrafficRange(ctx context.Context, userID string, from, to time.Time) (TrafficSummary, error) {
+	out := TrafficSummary{Series: []TrafficPoint{}}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT day, up, down FROM user_traffic_daily
+          WHERE user_id=? AND day >= ? AND day < ? ORDER BY day ASC`,
+		userID, dayKey(from), dayKey(to))
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p TrafficPoint
+		if err := rows.Scan(&p.Day, &p.Up, &p.Down); err != nil {
+			return out, err
+		}
+		out.Up += p.Up
+		out.Down += p.Down
+		out.Series = append(out.Series, p)
+	}
+	out.Total = out.Up + out.Down
+	out.Days = len(out.Series)
+	return out, rows.Err()
+}

@@ -14,15 +14,22 @@ import (
 // ---------------------------------------------------------------------------
 
 const serverCols = `id,name,address,remark,xray_mode,status,agent_version,protocol_version,
-                    last_seen_at,last_ip,last_error,created_at,updated_at`
+                    last_seen_at,last_ip,last_error,created_at,updated_at,
+                    region,region_country,region_city,provider_name,provider_url,
+                    telecom_paid_peer,traffic_limit,period_start_day,probe_visible,weight`
 
 func scanServer(sc interface {
 	Scan(...any) error
 }) (Server, error) {
 	var s Server
+	var paidPeer, probeVisible int
 	err := sc.Scan(&s.ID, &s.Name, &s.Address, &s.Remark, &s.XrayMode, &s.Status,
 		&s.AgentVersion, &s.ProtocolVersion, &s.LastSeenAt, &s.LastIP, &s.LastError,
-		&s.CreatedAt, &s.UpdatedAt)
+		&s.CreatedAt, &s.UpdatedAt,
+		&s.Region, &s.RegionCountry, &s.RegionCity, &s.ProviderName, &s.ProviderURL,
+		&paidPeer, &s.TrafficLimit, &s.PeriodStartDay, &probeVisible, &s.Weight)
+	s.TelecomPaidPeer = paidPeer != 0
+	s.ProbeVisible = probeVisible != 0
 	return s, err
 }
 
@@ -37,10 +44,12 @@ func (s *Store) CreateServer(ctx context.Context, name, address, remark, xrayMod
 		XrayMode: xrayMode, Status: ServerOffline, CreatedAt: now, UpdatedAt: now,
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO servers(`+serverCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO servers(`+serverCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		srv.ID, srv.Name, srv.Address, srv.Remark, srv.XrayMode, srv.Status,
 		srv.AgentVersion, srv.ProtocolVersion, srv.LastSeenAt, srv.LastIP, srv.LastError,
-		srv.CreatedAt, srv.UpdatedAt)
+		srv.CreatedAt, srv.UpdatedAt,
+		srv.Region, srv.RegionCountry, srv.RegionCity, srv.ProviderName, srv.ProviderURL,
+		0, srv.TrafficLimit, srv.PeriodStartDay, 1, srv.Weight)
 	if err != nil {
 		return Server{}, err
 	}
@@ -73,6 +82,24 @@ func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 		out = append(out, srv)
 	}
 	return out, rows.Err()
+}
+
+// UpdateServerDisplay 更新服务器的展示信息（探针/列表页用）。
+func (s *Store) UpdateServerDisplay(ctx context.Context, srv Server) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE servers SET region=?, region_country=?, region_city=?, provider_name=?,
+             provider_url=?, telecom_paid_peer=?, traffic_limit=?, period_start_day=?,
+             probe_visible=?, weight=?, updated_at=? WHERE id=?`,
+		srv.Region, srv.RegionCountry, srv.RegionCity, srv.ProviderName, srv.ProviderURL,
+		b2i(srv.TelecomPaidPeer), srv.TrafficLimit, srv.PeriodStartDay,
+		b2i(srv.ProbeVisible), srv.Weight, nowMS(), srv.ID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // UpdateServer 更新可变字段。

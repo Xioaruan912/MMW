@@ -371,6 +371,88 @@ for f in surfboard qx; do
   fi
 done
 
+head_ "7d3. 探针（伪装状态页）"
+# 默认关闭：对外暴露面必须显式开启，关闭时统一 404（不暴露存在性）
+CLOSED_CODE="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/public/probe-servers")"
+[[ "$CLOSED_CODE" == "404" ]] && ok "探针默认关闭时返回 404（不暴露存在性）" || bad "关闭态返回 $CLOSED_CODE"
+
+# 补服务器展示信息
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X PATCH "$BASE/api/admin/servers/$SERVER_ID/display" \
+  -H 'Content-Type: application/json' \
+  -d '{"region":"🇭🇰","region_country":"中国香港","region_city":"香港","provider_name":"示例云","provider_url":"https://example.com","traffic_limit":1099511627776,"period_start_day":5}'
+
+# 开启探针
+PUT_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X PUT "$BASE/api/admin/probe/settings" -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"title":"服务状态监控","theme":"auto","color_mode":"dark","show_name":false,"show_globe":true,"show_footer":true,"require_token":false,"refresh_seconds":5}')"
+[[ "$PUT_CODE" == "200" ]] && ok "探针设置已保存" || bad "保存探针设置失败 HTTP $PUT_CODE"
+
+curl -s -o "$WORK/probe.json" "$BASE/api/public/probe-servers"
+python3 - "$WORK/probe.json" <<'PY' && ok "探针快照结构正确且默认不暴露服务器名" || bad "探针快照异常"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d['enabled'] is True, d
+assert d['title'], '缺少标题'
+assert d['appearance']['revision'] >= 1, '缺少外观版本号'
+assert isinstance(d['servers'], list) and len(d['servers']) >= 1, '缺少服务器列表'
+sv = d['servers'][0]
+assert sv['name'] != 'e2e-node-01', f"show_name=false 时不应暴露真实名: {sv['name']}"
+assert sv['region_country'] == '中国香港', sv
+assert sv['provider_name'] == '示例云', sv
+assert sv['traffic_limit'] == 1099511627776, sv
+assert 'period_start' in sv and 'period_end' in sv, sv
+assert sv['period_start'].endswith('-05'), f"计费起始日应为 5 号: {sv['period_start']}"
+PY
+
+# show_name=true 时应展示真实名
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X PUT "$BASE/api/admin/probe/settings" \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"title":"服务状态监控","show_name":true,"show_globe":true,"require_token":false,"refresh_seconds":5}'
+curl -s -o "$WORK/probe2.json" "$BASE/api/public/probe-servers"
+grep -q '"name":"e2e-node-01"' "$WORK/probe2.json" && ok "show_name=true 时展示真实服务器名" || bad "show_name=true 未生效"
+
+# 令牌保护
+curl -s -o "$WORK/probe-token.json" -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/probe/token"
+PROBE_TOKEN="$(cat "$WORK/probe-token.json" | jget token 2>/dev/null || echo '')"
+[[ -n "$PROBE_TOKEN" ]] && ok "探针令牌已签发" || bad "签发探针令牌失败"
+
+NO_TOKEN_CODE="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/public/probe-servers")"
+[[ "$NO_TOKEN_CODE" == "404" ]] && ok "开启令牌保护后无令牌访问被拒（404）" || bad "无令牌竟然可访问: $NO_TOKEN_CODE"
+
+WITH_TOKEN_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Mmwx-Probe-Token: $PROBE_TOKEN" "$BASE/api/public/probe-servers")"
+[[ "$WITH_TOKEN_CODE" == "200" ]] && ok "携带正确令牌可访问（200）" || bad "正确令牌被拒: $WITH_TOKEN_CODE"
+
+WRONG_TOKEN_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Mmwx-Probe-Token: wrong" "$BASE/api/public/probe-servers")"
+[[ "$WRONG_TOKEN_CODE" == "404" ]] && ok "错误令牌被拒（404）" || bad "错误令牌竟然通过: $WRONG_TOKEN_CODE"
+
+# 历史序列
+SYS_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Mmwx-Probe-Token: $PROBE_TOKEN" \
+  "$BASE/api/public/probe-series?kind=system&server_id=$SERVER_ID")"
+[[ "$SYS_CODE" == "200" ]] && ok "kind=system 序列可查" || bad "system 序列 HTTP $SYS_CODE"
+
+NOID_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Mmwx-Probe-Token: $PROBE_TOKEN" \
+  "$BASE/api/public/probe-series?kind=system")"
+[[ "$NOID_CODE" == "400" ]] && ok "kind=system 缺少 server_id 时明确报 400" || bad "缺少参数未校验: $NOID_CODE"
+
+TRAF_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Mmwx-Probe-Token: $PROBE_TOKEN" \
+  "$BASE/api/public/probe-series?kind=traffic")"
+[[ "$TRAF_CODE" == "200" ]] && ok "kind=traffic 序列可查" || bad "traffic 序列 HTTP $TRAF_CODE"
+
+# 未实现的 kind 必须明确报错，而不是返回空数组（空数组会让排障方向完全错）
+LAT_CODE="$(curl -s -o "$WORK/lat.json" -w '%{http_code}' -H "X-Mmwx-Probe-Token: $PROBE_TOKEN" \
+  "$BASE/api/public/probe-series?kind=latency")"
+if [[ "$LAT_CODE" == "501" ]] && grep -q "尚未实现" "$WORK/lat.json"; then
+  ok "kind=latency 明确报未实现（501）而不是返回空数组"
+else
+  bad "latency 应返回 501 且说明原因，实得 $LAT_CODE"
+fi
+
+# 关闭探针
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X PUT "$BASE/api/admin/probe/settings" \
+  -H 'Content-Type: application/json' -d '{"enabled":false}'
+CLOSED2="$(curl -s -o /dev/null -w '%{http_code}' -H "X-Mmwx-Probe-Token: $PROBE_TOKEN" "$BASE/api/public/probe-servers")"
+[[ "$CLOSED2" == "404" ]] && ok "关闭后可访问性立即收回" || bad "关闭后仍可访问: $CLOSED2"
+
 head_ "7e. 任务持久化与 Pull 降级通道"
 TASKS_CODE="$(curl -s -o "$WORK/tasks.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/tasks?server_id=$SERVER_ID")"
 TASKS_N="$(cat "$WORK/tasks.json" | jget total 2>/dev/null || echo 0)"
