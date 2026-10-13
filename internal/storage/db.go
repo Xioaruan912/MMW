@@ -222,6 +222,26 @@ func (db *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrationV4SQL 是接口令牌与双因子。
+const migrationV4SQL = `
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL DEFAULT '',
+    token_hash   TEXT NOT NULL UNIQUE,
+    scopes       TEXT NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL DEFAULT 0,
+    last_used_at INTEGER NOT NULL DEFAULT 0,
+    revoked_at   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
+
+ALTER TABLE users ADD COLUMN totp_enabled        INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN totp_pending_secret TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN recovery_codes      TEXT NOT NULL DEFAULT '';
+`
+
 // migrationV3SQL 是任务持久化。
 const migrationV3SQL = `
 CREATE TABLE IF NOT EXISTS pending_tasks (
@@ -257,6 +277,11 @@ func init() {
 		Version: 3,
 		Name:    "pending_tasks",
 		SQL:     migrationV3SQL,
+	})
+	migrations = append(migrations, migration{
+		Version: 4,
+		Name:    "api_tokens_and_totp",
+		SQL:     migrationV4SQL,
 	})
 }
 

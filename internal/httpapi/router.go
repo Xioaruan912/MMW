@@ -46,6 +46,15 @@ func (s *Server) Routes() http.Handler {
 		pr.Use(s.mwRequireAuth, s.mwCSRF)
 		pr.Post("/api/logout", s.handleLogout)
 		pr.Get("/api/me", s.handleMe)
+
+		// ---- 个人安全设置 ----
+		pr.Get("/api/me/totp", s.handleTOTPStatus)
+		pr.Post("/api/me/totp/setup", s.handleTOTPSetup)
+		pr.Post("/api/me/totp/enable", s.handleTOTPEnable)
+		pr.Post("/api/me/totp/disable", s.handleTOTPDisable)
+		pr.Get("/api/me/tokens", s.handleListAPITokens)
+		pr.Post("/api/me/tokens", s.handleCreateAPIToken)
+		pr.Delete("/api/me/tokens/{id}", s.handleRevokeAPIToken)
 	})
 
 	// ---- 需要管理员 ----

@@ -83,18 +83,6 @@ NO_CSRF_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -X POST "$BA
   -H 'Content-Type: application/json' -d '{"name":"csrf-probe"}')"
 [[ "$NO_CSRF_CODE" == "403" ]] && ok "缺少 CSRF 头的变更请求被拒（403）" || bad "CSRF 防护失效：HTTP $NO_CSRF_CODE"
 
-head_ "2b. 登录防爆破"
-LOCKED=""
-for i in $(seq 1 7); do
-  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" \
-    -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-password"}')"
-  if [[ "$code" == "429" ]]; then LOCKED="yes"; break; fi
-done
-[[ "$LOCKED" == "yes" ]] && ok "连续错误口令触发限流（429）" || bad "登录限流未生效"
-GOOD_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" \
-  -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin@123456"}')"
-[[ "$GOOD_CODE" == "429" ]] && ok "锁定期内正确口令也被拒（429）" || bad "锁定期内竟然放行了：HTTP $GOOD_CODE"
-
 head_ "3. 新建服务器并取入驻令牌"
 CREATE_CODE="$(curl -s -o "$WORK/srv.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/servers" \
   -H 'Content-Type: application/json' \
@@ -417,6 +405,128 @@ else
   bad "首页未引用任何 /assets/*.js（前端没构建？）"
 fi
 
+head_ "11. 双因子（TOTP）与接口令牌"
+
+# 用独立账号做双因子测试：管理员的 IP+用户名已被防爆破测试锁定
+TOTP_USER="e2e-totp"
+TOTP_PASS="E2eTotp@12345"
+TCREATE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/users" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$TOTP_USER\",\"password\":\"$TOTP_PASS\",\"nickname\":\"双因子测试\"}")"
+[[ "$TCREATE" == "201" ]] && ok "已创建双因子测试账号" || bad "创建测试账号失败 HTTP $TCREATE"
+
+TJAR="$WORK/totp.jar"
+TLOGIN="$(curl -s -o /dev/null -w '%{http_code}' -c "$TJAR" -X POST "$BASE/api/login" \
+  -H 'Content-Type: application/json' -d "{\"username\":\"$TOTP_USER\",\"password\":\"$TOTP_PASS\"}")"
+[[ "$TLOGIN" == "200" ]] && ok "未启用双因子时可正常登录" || bad "测试账号登录失败 HTTP $TLOGIN"
+TCSRF="$(awk '/mmx_csrf/ {print $7}' "$TJAR" | tail -1)"
+
+# --- setup ---
+curl -s -o "$WORK/totp-setup.json" -b "$TJAR" -H "X-CSRF-Token: $TCSRF" \
+  -X POST "$BASE/api/me/totp/setup"
+TOTP_SECRET="$(cat "$WORK/totp-setup.json" | jget secret 2>/dev/null || echo '')"
+TOTP_URL="$(cat "$WORK/totp-setup.json" | jget otpauth_url 2>/dev/null || echo '')"
+[[ -n "$TOTP_SECRET" ]] && ok "已生成 TOTP 密钥" || bad "TOTP setup 失败: $(head -c 200 "$WORK/totp-setup.json")"
+[[ "$TOTP_URL" == otpauth://totp/* ]] && ok "返回 otpauth:// 扫码地址" || bad "otpauth URL 异常: $TOTP_URL"
+
+# 尚未输入验证码，双因子不应生效
+TSTATE="$(curl -s -b "$TJAR" "$BASE/api/me/totp" | jget enabled 2>/dev/null || echo '?')"
+[[ "$TSTATE" == "False" ]] && ok "未验证前双因子不生效" || bad "未验证就生效了: $TSTATE"
+
+totp_code() {
+  python3 - "$1" <<'PY'
+import base64, hashlib, hmac, struct, sys, time
+secret = sys.argv[1].strip().upper()
+pad = '=' * ((8 - len(secret) % 8) % 8)
+key = base64.b32decode(secret + pad)
+counter = int(time.time()) // 30
+h = hmac.new(key, struct.pack('>Q', counter), hashlib.sha1).digest()
+o = h[19] & 0x0F
+code = (struct.unpack('>I', h[o:o+4])[0] & 0x7FFFFFFF) % 1000000
+print(f'{code:06d}')
+PY
+}
+
+CODE="$(totp_code "$TOTP_SECRET")"
+[[ "$CODE" =~ ^[0-9]{6}$ ]] && ok "本地算出动态码 $CODE" || bad "动态码计算失败: $CODE"
+
+# --- enable ---
+E_CODE="$(curl -s -o "$WORK/totp-enable.json" -w '%{http_code}' -b "$TJAR" -H "X-CSRF-Token: $TCSRF" \
+  -X POST "$BASE/api/me/totp/enable" -H 'Content-Type: application/json' -d "{\"code\":\"$CODE\"}")"
+[[ "$E_CODE" == "200" ]] && ok "双因子启用成功" || bad "启用失败 HTTP $E_CODE: $(head -c 200 "$WORK/totp-enable.json")"
+RECOVERY_N="$(cat "$WORK/totp-enable.json" | jget recovery_codes | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
+[[ "$RECOVERY_N" == "8" ]] && ok "已生成 8 个一次性恢复码" || bad "恢复码数量异常: $RECOVERY_N"
+RECOVERY_1="$(cat "$WORK/totp-enable.json" | jget 'recovery_codes.0' 2>/dev/null || echo '')"
+
+TSTATE2="$(curl -s -b "$TJAR" "$BASE/api/me/totp" | jget enabled 2>/dev/null || echo '?')"
+[[ "$TSTATE2" == "True" ]] && ok "双因子状态已变为启用" || bad "状态未更新: $TSTATE2"
+
+# --- 登录必须带第二因子 ---
+N1="$(curl -s -o "$WORK/login-no2fa.json" -w '%{http_code}' -X POST "$BASE/api/login" \
+  -H 'Content-Type: application/json' -d "{\"username\":\"$TOTP_USER\",\"password\":\"$TOTP_PASS\"}")"
+[[ "$N1" == "401" ]] && ok "只给口令不给第二因子被拒（401）" || bad "双因子未拦截: HTTP $N1"
+grep -q "totp_required" "$WORK/login-no2fa.json" && ok "错误码为 totp_required（前端可据此提示）" || bad "错误码不明确"
+
+N2="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$TOTP_USER\",\"password\":\"$TOTP_PASS\",\"totp_code\":\"000000\"}")"
+[[ "$N2" == "401" ]] && ok "错误动态码被拒" || bad "错误动态码竟然放行: $N2"
+
+CODE2="$(totp_code "$TOTP_SECRET")"
+N3="$(curl -s -o /dev/null -w '%{http_code}' -c "$WORK/totp2.jar" -X POST "$BASE/api/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$TOTP_USER\",\"password\":\"$TOTP_PASS\",\"totp_code\":\"$CODE2\"}")"
+[[ "$N3" == "200" ]] && ok "带正确动态码登录成功" || bad "正确动态码登录失败: $N3"
+
+# --- 恢复码可用且一次性 ---
+N4="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$TOTP_USER\",\"password\":\"$TOTP_PASS\",\"totp_code\":\"$RECOVERY_1\"}")"
+[[ "$N4" == "200" ]] && ok "一次性恢复码可用于登录" || bad "恢复码登录失败: $N4"
+N5="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$TOTP_USER\",\"password\":\"$TOTP_PASS\",\"totp_code\":\"$RECOVERY_1\"}")"
+[[ "$N5" == "401" ]] && ok "同一恢复码不可重复使用" || bad "恢复码被重复使用: $N5"
+LEFT="$(curl -s -b "$TJAR" "$BASE/api/me/totp" | jget recovery_codes_left 2>/dev/null || echo '?')"
+[[ "$LEFT" == "7" ]] && ok "恢复码计数已扣减（剩 7）" || bad "恢复码计数异常: $LEFT"
+
+# --- 关闭双因子 ---
+D_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$TJAR" -H "X-CSRF-Token: $TCSRF" \
+  -X POST "$BASE/api/me/totp/disable" -H 'Content-Type: application/json' \
+  -d "{\"code\":\"$(totp_code "$TOTP_SECRET")\"}")"
+[[ "$D_CODE" == "200" ]] && ok "双因子已关闭" || bad "关闭失败 HTTP $D_CODE"
+N6="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"$TOTP_USER\",\"password\":\"$TOTP_PASS\"}")"
+[[ "$N6" == "200" ]] && ok "关闭后可只用口令登录" || bad "关闭后仍需第二因子: $N6"
+
+head_ "12. 接口令牌（API Token）"
+TC="$(curl -s -o "$WORK/atk.json" -w '%{http_code}' -b "$TJAR" -H "X-CSRF-Token: $TCSRF" \
+  -X POST "$BASE/api/me/tokens" -H 'Content-Type: application/json' -d '{"name":"e2e-cli"}')"
+[[ "$TC" == "201" ]] && ok "接口令牌已创建" || bad "创建令牌失败 HTTP $TC: $(head -c 200 "$WORK/atk.json")"
+API_TOKEN="$(cat "$WORK/atk.json" | jget token 2>/dev/null || echo '')"
+ATK_ID="$(cat "$WORK/atk.json" | jget meta.id 2>/dev/null || echo '')"
+[[ "$API_TOKEN" == mmx_* ]] && ok "令牌格式为 mmx_ 前缀" || bad "令牌格式异常: $API_TOKEN"
+
+# 用令牌访问需要鉴权的接口
+H_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $API_TOKEN" "$BASE/api/me")"
+[[ "$H_CODE" == "200" ]] && ok "Bearer 令牌可访问 /api/me" || bad "令牌鉴权失败: $H_CODE"
+
+# 令牌鉴权不走 CSRF：不带 X-CSRF-Token 的写操作应当成功
+# （用普通用户也有权限的端点，避免与「管理员权限」这个正交检查混淆）
+W_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $API_TOKEN" \
+  -X POST "$BASE/api/me/tokens" -H 'Content-Type: application/json' -d '{"name":"via-token"}')"
+[[ "$W_CODE" == "201" ]] && ok "接口令牌不受 CSRF 限制（无 cookie 即无跨站风险）" || bad "令牌写操作被拒: $W_CODE"
+
+# 权限仍然生效：普通用户的令牌不能调管理员接口
+A_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $API_TOKEN" \
+  -X POST "$BASE/api/admin/servers" -H 'Content-Type: application/json' -d '{"name":"should-fail"}')"
+[[ "$A_CODE" == "403" ]] && ok "令牌权限等同所属用户（普通用户令牌调管理员接口 403）" || bad "越权未被拦截: $A_CODE"
+
+# 吊销后立即失效
+curl -s -o /dev/null -b "$TJAR" -H "X-CSRF-Token: $TCSRF" -X DELETE "$BASE/api/me/tokens/$ATK_ID"
+R_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $API_TOKEN" "$BASE/api/me")"
+[[ "$R_CODE" == "401" ]] && ok "吊销后令牌立即失效（401）" || bad "吊销未生效: $R_CODE"
+
+BAD_CODE2="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer mmx_not-a-real-token" "$BASE/api/me")"
+[[ "$BAD_CODE2" == "401" ]] && ok "伪造令牌被拒（401）" || bad "伪造令牌竟然通过: $BAD_CODE2"
+
 head_ "10. 审计日志"
 curl -s -b "$COOKIE" "$BASE/api/admin/audit" -o "$WORK/audit.json"
 AUDIT_N="$(cat "$WORK/audit.json" | jget total 2>/dev/null || echo 0)"
@@ -427,6 +537,18 @@ d=json.load(open(sys.argv[1]))['logs']
 for x in d[:5]:
     print(f"      · {x['action']:<24} actor={x['actor'] or '-'} target={x['target'][:20]}")
 PY
+
+head_ "13. 登录防爆破（放在最后，避免 IP 级锁定影响其它登录用例）"
+LOCKED=""
+for i in $(seq 1 7); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" \
+    -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-password"}')"
+  if [[ "$code" == "429" ]]; then LOCKED="yes"; break; fi
+done
+[[ "$LOCKED" == "yes" ]] && ok "连续错误口令触发限流（429）" || bad "登录限流未生效"
+GOOD_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/login" \
+  -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin@123456"}')"
+[[ "$GOOD_CODE" == "429" ]] && ok "锁定期内正确口令也被拒（429）" || bad "锁定期内竟然放行了：HTTP $GOOD_CODE"
 
 echo
 c 36 "============================================================"

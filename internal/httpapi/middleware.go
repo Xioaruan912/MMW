@@ -33,7 +33,29 @@ const (
 	ctxUsername ctxKey = "username"
 	ctxRole     ctxKey = "role"
 	ctxRequest  ctxKey = "request_id"
+	ctxAuthKind ctxKey = "auth_kind"
 )
+
+// 鉴权方式。
+const (
+	AuthKindSession = "session"
+	AuthKindToken   = "token"
+)
+
+// AuthKindFrom 返回本次请求的鉴权方式。
+func AuthKindFrom(ctx context.Context) string {
+	k, _ := ctx.Value(ctxAuthKind).(string)
+	return k
+}
+
+// bearerToken 从 Authorization 头取 Bearer 令牌。
+func bearerToken(r *http.Request) string {
+	v := r.Header.Get("Authorization")
+	if after, ok := strings.CutPrefix(v, "Bearer "); ok {
+		return strings.TrimSpace(after)
+	}
+	return ""
+}
 
 // UserFrom 从请求上下文取当前用户 ID / 角色。
 func UserFrom(ctx context.Context) (id, username, role string) {
@@ -131,28 +153,65 @@ func (s *Server) mwAccessLog(next http.Handler) http.Handler {
 	})
 }
 
-// mwRequireAuth 校验会话 cookie。
+// mwRequireAuth 校验身份。两种方式：
+//
+//  1. Authorization: Bearer mmx_xxx  —— 接口令牌（程序调用，不走 CSRF）
+//  2. mmx_session cookie             —— 浏览器会话（需过 CSRF 中间件）
 func (s *Server) mwRequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(SessionCookie)
-		if err != nil || c.Value == "" {
-			writeErr(w, http.StatusUnauthorized, "unauthorized", "请先登录")
+		if tok := bearerToken(r); strings.HasPrefix(tok, "mmx_") {
+			s.authByAPIToken(next, w, r, tok)
 			return
 		}
-		u, err := s.store.SessionUser(r.Context(), auth.HashToken(c.Value))
-		if err != nil {
-			writeErr(w, http.StatusUnauthorized, "unauthorized", "会话已失效，请重新登录")
-			return
-		}
-		if u.Status != storage.StatusOn {
-			writeErr(w, http.StatusForbidden, "disabled", "账号已被禁用")
-			return
-		}
-		ctx := context.WithValue(r.Context(), ctxUserID, u.ID)
-		ctx = context.WithValue(ctx, ctxUsername, u.Username)
-		ctx = context.WithValue(ctx, ctxRole, u.Role)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		s.authBySession(next, w, r)
 	})
+}
+
+func (s *Server) authByAPIToken(next http.Handler, w http.ResponseWriter, r *http.Request, tok string) {
+	ctx := r.Context()
+	at, err := s.store.FindAPITokenByHash(ctx, auth.HashToken(tok))
+	if err != nil || !at.Valid(time.Now()) {
+		writeErr(w, http.StatusUnauthorized, "unauthorized", "接口令牌无效或已失效")
+		return
+	}
+	u, err := s.store.GetUser(ctx, at.UserID)
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "unauthorized", "令牌所属账号不存在")
+		return
+	}
+	if u.Status != storage.StatusOn {
+		writeErr(w, http.StatusForbidden, "disabled", "账号已被禁用")
+		return
+	}
+	s.store.TouchAPIToken(ctx, at.ID)
+
+	c := context.WithValue(ctx, ctxUserID, u.ID)
+	c = context.WithValue(c, ctxUsername, u.Username)
+	c = context.WithValue(c, ctxRole, u.Role)
+	c = context.WithValue(c, ctxAuthKind, AuthKindToken)
+	next.ServeHTTP(w, r.WithContext(c))
+}
+
+func (s *Server) authBySession(next http.Handler, w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(SessionCookie)
+	if err != nil || c.Value == "" {
+		writeErr(w, http.StatusUnauthorized, "unauthorized", "请先登录")
+		return
+	}
+	u, err := s.store.SessionUser(r.Context(), auth.HashToken(c.Value))
+	if err != nil {
+		writeErr(w, http.StatusUnauthorized, "unauthorized", "会话已失效，请重新登录")
+		return
+	}
+	if u.Status != storage.StatusOn {
+		writeErr(w, http.StatusForbidden, "disabled", "账号已被禁用")
+		return
+	}
+	ctx := context.WithValue(r.Context(), ctxUserID, u.ID)
+	ctx = context.WithValue(ctx, ctxUsername, u.Username)
+	ctx = context.WithValue(ctx, ctxRole, u.Role)
+	ctx = context.WithValue(ctx, ctxAuthKind, AuthKindSession)
+	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // mwRequireAdmin 在 RequireAuth 之后校验管理员角色。

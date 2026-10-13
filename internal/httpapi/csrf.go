@@ -38,6 +38,11 @@ func (s *Server) mwCSRF(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// 接口令牌（Authorization: Bearer）不是 cookie 鉴权，不存在跨站自动携带问题
+		if AuthKindFrom(r.Context()) == AuthKindToken {
+			next.ServeHTTP(w, r)
+			return
+		}
 		c, err := r.Cookie(CSRFCookie)
 		if err != nil || c.Value == "" {
 			writeErr(w, http.StatusForbidden, "csrf_missing", "缺少 CSRF 令牌，请刷新页面后重试")

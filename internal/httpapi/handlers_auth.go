@@ -96,6 +96,8 @@ func (s *Server) handleSetupInit(w http.ResponseWriter, r *http.Request) {
 type loginReq struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// 双因子验证码（6 位动态码或一次性恢复码）；未启用双因子的账号可为空
+	TOTPCode string `json:"totp_code"`
 }
 
 // handleLogin 校验口令并签发会话 cookie。
@@ -132,6 +134,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "disabled", "账号已被禁用")
 		return
 	}
+
+	// 双因子：口令正确还不够，必须再过第二因子
+	if totpState, err := s.store.GetTOTPState(ctx, u.ID); err == nil && totpState.Enabled {
+		if !s.verifySecondFactor(ctx, u.ID, totpState, req.TOTPCode) {
+			s.limiter.Fail(ip, req.Username)
+			s.store.Audit(ctx, storage.AuditLoginFail, req.Username, u.ID,
+				"双因子校验失败", ip)
+			writeErr(w, http.StatusUnauthorized, "totp_required",
+				"需要双因子验证码（请填写 6 位动态码或一次性恢复码）")
+			return
+		}
+	}
+
 	if err := s.issueSession(w, r, u); err != nil {
 		mapError(s.log, w, err, "login session")
 		return
