@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -513,9 +514,9 @@ func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request) {
 		mapError(s.log, w, err, "subscription build entries")
 		return
 	}
-	body, ctype, err := subscription.Render(entries, format)
+	body, ctype, err := s.renderSubscription(r, u, entries, format)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "render_failed", err.Error())
+		writeErr(w, http.StatusBadRequest, "render_failed", err.Error())
 		return
 	}
 
@@ -557,4 +558,23 @@ func subscriptionUserInfo(u storage.User) string {
 	}
 	return "upload=" + itoa64(upload) + "; download=" + itoa64(download) +
 		"; total=" + itoa64(u.TrafficLimit) + "; expire=" + itoa64(expire)
+}
+
+// renderSubscription 按用户配置的模板渲染订阅。
+//
+// 只有 Clash 系（clash / stash）与 Egern 走模板；URI / base64 / sing-box
+// 没有"模板"这个概念，仍走内置渲染器。
+func (s *Server) renderSubscription(r *http.Request, u storage.User, entries []subscription.Entry, f subscription.Format) ([]byte, string, error) {
+	if u.TemplateID != "" && (f == subscription.FormatClash || f == subscription.FormatStash) {
+		if tmpl, err := s.store.GetRuleTemplate(r.Context(), u.TemplateID); err == nil {
+			body, err := subscription.RenderClashWithTemplate(entries, tmpl, subscription.DefaultClashOptions())
+			if err != nil {
+				return nil, "", fmt.Errorf("模板渲染失败: %w", err)
+			}
+			return body, "text/yaml; charset=utf-8", nil
+		}
+		// 模板被删了就回落到内置渲染，而不是让用户订阅直接 500
+		s.log.Warn("用户指定的模板不存在，回落内置渲染", "user", u.ID, "template", u.TemplateID)
+	}
+	return subscription.Render(entries, f)
 }

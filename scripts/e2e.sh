@@ -364,7 +364,7 @@ grep -q '^\[Proxy\]' "$WORK/sub-ua.conf" && ok "按 Surge UA 自动分流到 Sur
 # 不支持 REALITY 的客户端必须明确报错，而不是给一份导入即错的配置
 for f in surfboard qx; do
   code="$(curl -s -o "$WORK/sub-$f.out" -w '%{http_code}' "$BASE/sub/$SUB_TOKEN?format=$f")"
-  if [[ "$code" == "500" ]] && grep -q "不支持 REALITY" "$WORK/sub-$f.out"; then
+  if [[ "$code" == "400" ]] && grep -q "不支持 REALITY" "$WORK/sub-$f.out"; then
     ok "$f 对 REALITY 明确报错（不静默降级）"
   else
     bad "$f 应当拒绝 REALITY，实得 HTTP $code: $(head -c 160 "$WORK/sub-$f.out")"
@@ -525,6 +525,104 @@ RST_CODE="$(curl -s -o "$WORK/restore.json" -w '%{http_code}' -b "$COOKIE" -H "X
   -H 'Content-Type: application/octet-stream')"
 [[ "$RST_CODE" == "202" ]] && ok "合法备份包被接受（202，要求重启生效）" || bad "恢复失败 HTTP $RST_CODE: $(head -c 200 "$WORK/restore.json")"
 grep -q '"restart_required":true' "$WORK/restore.json" && ok "明确告知需要重启" || bad "未告知需要重启"
+
+head_ "7d5. 订阅模板 / 规则集 / 订阅文件"
+TPL_CODE="$(curl -s -o "$WORK/tpl.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/templates")"
+TPL_N="$(grep -o '"builtin":true' "$WORK/tpl.json" | wc -l | tr -d ' ')"
+[[ "$TPL_CODE" == "200" && "$TPL_N" -ge 3 ]] && ok "内置模板已写入（$TPL_N 个）" || bad "内置模板缺失 HTTP $TPL_CODE n=$TPL_N"
+grep -q '{{PROXIES}}' "$WORK/tpl.json" && ok "接口暴露占位符说明" || bad "缺少占位符说明"
+
+# 从内置模板复制一个
+CP_CODE="$(curl -s -o "$WORK/tpl-copy.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/templates" -H 'Content-Type: application/json' \
+  -d '{"name":"e2e-custom","copy_from":"simple","description":"端到端复制"}')"
+CPL_ID="$(cat "$WORK/tpl-copy.json" | jget template.id 2>/dev/null || echo '')"
+[[ "$CP_CODE" == "201" && -n "$CPL_ID" ]] && ok "从内置模板复制成功" || bad "复制模板失败 HTTP $CP_CODE: $(head -c 200 "$WORK/tpl-copy.json")"
+
+# 缺少占位符的模板必须被拒（否则渲染出空配置，用户在客户端才发现）
+BADTPL_CODE="$(curl -s -o "$WORK/tpl-bad.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/templates" -H 'Content-Type: application/json' \
+  -d '{"name":"e2e-bad","content":"proxies: []\nproxy-groups: []\nrules: []\n"}')"
+[[ "$BADTPL_CODE" == "400" ]] && ok "缺少节点占位符的模板被拒（400）" || bad "无效模板未被拒: $BADTPL_CODE"
+
+# 非法 YAML 必须被拒
+BADYAML_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/templates" -H 'Content-Type: application/json' \
+  -d '{"name":"e2e-badyaml","content":"proxies:\n{{PROXIES}}\n  \t- broken: [\n"}')"
+[[ "$BADYAML_CODE" == "400" ]] && ok "非法 YAML 模板被拒（400）" || bad "非法 YAML 未被拒: $BADYAML_CODE"
+
+# 内置模板不可删除
+BUILTIN_ID="$(python3 -c "
+import json,sys
+d=json.load(open('$WORK/tpl.json'))
+for t in d['templates']:
+    if t['name']=='simple': print(t['id']); break" 2>/dev/null || echo '')"
+DELB_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X DELETE "$BASE/api/admin/templates/$BUILTIN_ID")"
+[[ "$DELB_CODE" == "400" ]] && ok "内置模板不可删除（400）" || bad "内置模板被删了: $DELB_CODE"
+
+# 预览：渲染结果必须是合法 YAML 且含节点
+curl -s -o "$WORK/tpl-preview.yaml" -b "$COOKIE" "$BASE/api/admin/templates/$CPL_ID/preview"
+python3 - "$WORK/tpl-preview.yaml" <<'PY' && ok "模板预览产出合法 Clash 配置" || bad "模板预览异常"
+import sys
+try:
+    import yaml
+except ImportError:
+    # 没有 pyyaml 时退化为结构检查
+    txt = open(sys.argv[1]).read()
+    assert 'proxies:' in txt and 'proxy-groups:' in txt and 'rules:' in txt, txt[:200]
+    raise SystemExit(0)
+d = yaml.safe_load(open(sys.argv[1]))
+assert isinstance(d.get('proxies'), list) and d['proxies'], '缺少 proxies'
+assert isinstance(d.get('proxy-groups'), list), '缺少 proxy-groups'
+assert isinstance(d.get('rules'), list), '缺少 rules'
+names = [p['name'] for p in d['proxies']]
+assert names, '代理列表为空'
+PY
+grep -q '预览节点' "$WORK/tpl-preview.yaml" && ok "无节点时用占位节点保证结构可验证" || bad "预览未使用占位节点"
+
+# 把模板绑到用户，订阅应改用该模板
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X PUT "$BASE/api/admin/users/$USER_ID/template" \
+  -H 'Content-Type: application/json' -d "{\"template_id\":\"$CPL_ID\"}"
+curl -s -o "$WORK/sub-tpl.yaml" -b "$COOKIE" "$BASE/sub/$SUB_TOKEN?format=clash"
+grep -q '香港-01' "$WORK/sub-tpl.yaml" && ok "绑定模板后订阅仍含真实节点" || bad "模板订阅缺少节点"
+
+# 模板被删后订阅应回落内置渲染，而不是 500
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X DELETE "$BASE/api/admin/templates/$CPL_ID"
+FALLBACK_CODE="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/sub/$SUB_TOKEN?format=clash")"
+[[ "$FALLBACK_CODE" == "200" ]] && ok "模板被删后订阅回落内置渲染（不 500）" || bad "模板删除后订阅失败: $FALLBACK_CODE"
+
+# ---- 规则集 ----
+RP_CODE="$(curl -s -o "$WORK/rp.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/rule-providers" -H 'Content-Type: application/json' \
+  -d '{"name":"e2e-ads","type":"http","behavior":"domain","format":"yaml","url":"https://example.com/ads.yaml","interval":86400}')"
+RP_ID="$(cat "$WORK/rp.json" | jget provider.id 2>/dev/null || echo '')"
+[[ "$RP_CODE" == "201" && -n "$RP_ID" ]] && ok "规则集已创建" || bad "创建规则集失败 HTTP $RP_CODE"
+
+NORP_CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/rule-providers" -H 'Content-Type: application/json' \
+  -d '{"name":"e2e-nonurl","type":"http"}')"
+[[ "$NORP_CODE" == "400" ]] && ok "type=http 缺 URL 被拒（400）" || bad "缺少 URL 未校验: $NORP_CODE"
+
+RP_LIST="$(curl -s -b "$COOKIE" "$BASE/api/admin/rule-providers")"
+echo "$RP_LIST" | grep -q 'e2e-ads' && ok "规则集列表可查" || bad "规则集列表异常"
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X DELETE "$BASE/api/admin/rule-providers/$RP_ID"
+
+# ---- 订阅文件 ----
+SF_CODE="$(curl -s -o "$WORK/sf.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/subscribe-files" -H 'Content-Type: application/json' \
+  -d '{"name":"e2e-file.yaml","content":"proxies: []\n"}')"
+SF_ID="$(cat "$WORK/sf.json" | jget file.id 2>/dev/null || echo '')"
+[[ "$SF_CODE" == "201" && -n "$SF_ID" ]] && ok "订阅文件已创建" || bad "创建订阅文件失败 HTTP $SF_CODE"
+
+EMPTY_SF="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/subscribe-files" -H 'Content-Type: application/json' -d '{"name":"x","content":""}')"
+[[ "$EMPTY_SF" == "400" ]] && ok "空内容订阅文件被拒（400）" || bad "空内容未校验: $EMPTY_SF"
+
+# 列表接口不应把内容一起返回（避免列表响应过大）
+SF_LIST="$(curl -s -b "$COOKIE" "$BASE/api/admin/subscribe-files")"
+echo "$SF_LIST" | grep -q 'proxies' && bad "订阅文件列表不应携带正文" || ok "订阅文件列表不携带正文"
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X DELETE "$BASE/api/admin/subscribe-files/$SF_ID"
 
 head_ "7e. 任务持久化与 Pull 降级通道"
 TASKS_CODE="$(curl -s -o "$WORK/tasks.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/tasks?server_id=$SERVER_ID")"

@@ -134,6 +134,20 @@ func (s *Server) Routes() http.Handler {
 		pr.Patch("/api/admin/announcements/{id}", s.handleUpdateAnnouncement)
 		pr.Delete("/api/admin/announcements/{id}", s.handleDeleteAnnouncement)
 
+		// ---- 订阅模板 / 规则集 / 订阅文件 ----
+		pr.Get("/api/admin/templates", s.handleListRuleTemplates)
+		pr.Post("/api/admin/templates", s.handleCreateRuleTemplate)
+		pr.Patch("/api/admin/templates/{id}", s.handleUpdateRuleTemplate)
+		pr.Delete("/api/admin/templates/{id}", s.handleDeleteRuleTemplate)
+		pr.Get("/api/admin/templates/{id}/preview", s.handlePreviewRuleTemplate)
+		pr.Get("/api/admin/rule-providers", s.handleListRuleProviders)
+		pr.Post("/api/admin/rule-providers", s.handleCreateRuleProvider)
+		pr.Delete("/api/admin/rule-providers/{id}", s.handleDeleteRuleProvider)
+		pr.Get("/api/admin/subscribe-files", s.handleListSubscribeFiles)
+		pr.Post("/api/admin/subscribe-files", s.handleCreateSubscribeFile)
+		pr.Delete("/api/admin/subscribe-files/{id}", s.handleDeleteSubscribeFile)
+		pr.Put("/api/admin/users/{id}/template", s.handleSetUserTemplate)
+
 		// ---- 备份 / 恢复 ----
 		pr.Get("/api/admin/backup/download", s.handleBackupDownload)
 		pr.Post("/api/admin/backup/restore", s.handleBackupRestore)

@@ -1,0 +1,41 @@
+feat(P7): 订阅模板引擎 + 规则集 + 订阅文件
+
+模板引擎（internal/ruleengine）
+- 模板就是一份**可直接粘贴进 Clash 使用**的配置，只在节点位置留两个占位符：
+  {{PROXIES}} 与 {{PROXY_NAMES}}
+- 不用 text/template：配置里大量出现 {{ }}、$、反引号，通用模板引擎容易与之冲突，
+  且报错信息对运维不友好
+- **缩进感知替换**：占位符的缩进跟随它所在列。
+  这是本轮最关键的一处 —— 占位符既可能出现在顶层（proxies:），
+  也可能在嵌套层（proxy-groups[].proxies:），把缩进写死在渲染器里必然在某一层被打破。
+  第一版内置模板自己就踩了这个坑（占位符写在列 0，同级项在列 6）。
+- 空节点列表仍产出 `proxies: []` 而不是 null 或坏 YAML
+- 校验三层：名称/内容非空 -> 必须含节点占位符（否则渲染出空配置，
+  用户在客户端才发现"连不上"）-> YAML 语法（用与真实渲染完全相同的替换逻辑做探针）
+
+内置模板
+- minimal / simple / full 三份，启动时写入数据库（已存在则跳过）
+- 每份都是完整可用的 Clash 配置，含 dns / proxy-groups / rules
+
+数据层（迁移 v8）
+- rule_templates / rule_providers / subscribe_files 三张表
+- users 增加 template_id（用户可绑定自己的模板）
+- 内置模板不可删除（只能复制后改）
+
+接口
+- GET/POST/PATCH/DELETE /api/admin/templates（支持 copy_from 从内置复制）
+- GET /api/admin/templates/{id}/preview（无节点时用占位节点，保证结构可验证）
+- GET/POST/DELETE /api/admin/rule-providers
+- GET/POST/DELETE /api/admin/subscribe-files（列表接口不返回正文，避免响应过大）
+- PUT /api/admin/users/{id}/template
+
+订阅口
+- 绑定了模板的 Clash 系订阅走模板渲染；模板被删则**回落内置渲染**而不是 500
+- URI / base64 / sing-box 没有"模板"概念，仍走内置渲染器
+
+测试
+- ruleengine 单测 9 组：三份内置模板全部可渲染、占位符缺失/空字段/坏 YAML 三种拒绝、
+  同行占位符拒绝、**缩进跟随**（嵌套层与顶层两个方向）、空节点列表语义正确
+- e2e 新增 16 项（148/148 通过）
+- 顺带修正 e2e 两处自身问题：把 JSON 字符串当 grep 的文件参数、
+  订阅格式拒绝用例的期望码应与实现一致（400 而非 500）

@@ -27,6 +27,7 @@ import (
 	"github.com/mmx-project/mmx/internal/logging"
 	"github.com/mmx-project/mmx/internal/notify"
 	"github.com/mmx-project/mmx/internal/probe"
+	"github.com/mmx-project/mmx/internal/ruleengine"
 	"github.com/mmx-project/mmx/internal/storage"
 	"github.com/mmx-project/mmx/internal/traffic"
 	"github.com/mmx-project/mmx/internal/version"
@@ -110,6 +111,10 @@ func run() error {
 
 	sweeper := agentlink.NewSweeper(log, reg, hub, 30*time.Second, 30*24*time.Hour)
 	go sweeper.Run(ctx)
+
+	if err := ruleengine.EnsureBuiltins(ctx, store, log); err != nil {
+		return fmt.Errorf("写入内置订阅模板失败: %w", err)
+	}
 
 	probeSvc := probe.NewService(store, hub.IsOnline)
 	notifier := notify.New(store, log)

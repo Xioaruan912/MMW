@@ -222,6 +222,45 @@ func (db *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrationV8SQL 是订阅模板 / 规则集 / 订阅文件。
+const migrationV8SQL = `
+CREATE TABLE IF NOT EXISTS rule_templates (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    content     TEXT NOT NULL,
+    builtin     INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rule_providers (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    type       TEXT NOT NULL DEFAULT 'http',  -- http | file | inline
+    behavior   TEXT NOT NULL DEFAULT 'classical',
+    format     TEXT NOT NULL DEFAULT 'yaml',
+    url        TEXT NOT NULL DEFAULT '',
+    path       TEXT NOT NULL DEFAULT '',
+    interval   INTEGER NOT NULL DEFAULT 86400,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS subscribe_files (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- 订阅时选用的模板（空表示用内置常用模板）
+ALTER TABLE users ADD COLUMN template_id TEXT NOT NULL DEFAULT '';
+`
+
 // migrationV7SQL 是公告。
 const migrationV7SQL = `
 CREATE TABLE IF NOT EXISTS announcements (
@@ -347,6 +386,11 @@ func init() {
 		Version: 7,
 		Name:    "announcements",
 		SQL:     migrationV7SQL,
+	})
+	migrations = append(migrations, migration{
+		Version: 8,
+		Name:    "rule_templates_providers_subscribe_files",
+		SQL:     migrationV8SQL,
 	})
 }
 
