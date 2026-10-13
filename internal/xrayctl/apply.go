@@ -42,7 +42,17 @@ func (a *Applier) BuildForServer(ctx context.Context, serverID string) (*BuildRe
 		}
 		clients[in.ID] = cs
 	}
-	return Build(inbounds, clients, a.opts)
+	outbounds, err := a.store.ListOutbounds(ctx, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("读取自定义出站失败: %w", err)
+	}
+	rules, err := a.store.ListRoutingRules(ctx, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("读取路由规则失败: %w", err)
+	}
+	return BuildInput(Input{
+		Inbounds: inbounds, Clients: clients, Outbounds: outbounds, Rules: rules,
+	}, a.opts)
 }
 
 // ApplyResult 是一次下发的产物。

@@ -52,10 +52,32 @@ type BuildResult struct {
 	Tags   []string // 参与构建的入站 tag（便于日志与对比）
 }
 
-// Build 根据入站与客户端生成一台服务器的完整 Xray 配置。
+// Input 是一台服务器的完整期望状态。
+type Input struct {
+	Inbounds  []storage.Inbound
+	Clients   map[string][]storage.InboundClient
+	Outbounds []storage.Outbound
+	Rules     []storage.RoutingRule
+}
+
+// Build 根据入站与客户端生成配置（不含自定义出站与路由规则）。
 //
-// clients 以 inbound ID 为键；未提供的入站视为没有客户端。
+// 保留这个签名是为了让只关心入站的调用方（例如测试）不必构造完整 Input。
 func Build(inbounds []storage.Inbound, clients map[string][]storage.InboundClient, opts Options) (*BuildResult, error) {
+	return BuildInput(Input{Inbounds: inbounds, Clients: clients}, opts)
+}
+
+// BuildInput 生成一台服务器的完整 Xray 配置。
+//
+// 渲染顺序与 Xray 的语义强相关：
+//
+//	入站顺序  —— 保持数据库顺序（按端口），便于人工比对
+//	出站顺序  —— 自定义出站在前，direct/block 固定在后（它们被默认引用）
+//	路由顺序  —— 自定义规则在前，内置的 api/block 规则在后
+//	          （Xray 按顺序匹配，先命中先生效；把宽泛规则放前面会吃掉所有流量）
+func BuildInput(in Input, opts Options) (*BuildResult, error) {
+	inbounds := in.Inbounds
+	clients := in.Clients
 	if opts.LogLevel == "" {
 		opts.LogLevel = "warning"
 	}
@@ -120,13 +142,50 @@ func Build(inbounds []storage.Inbound, clients map[string][]storage.InboundClien
 	}
 
 	// ---- outbounds ----
-	cfg.Outbounds = []map[string]any{
-		{"tag": "direct", "protocol": "freedom", "settings": map[string]any{"domainStrategy": "UseIP"}},
-		{"tag": "block", "protocol": "blackhole", "settings": map[string]any{}},
+	// 自定义出站放在前面：它们可能被路由规则或其它出站（链式）引用
+	customTags := map[string]bool{}
+	for _, o := range in.Outbounds {
+		if !o.Enabled {
+			continue
+		}
+		obj, err := RenderOutbound(o)
+		if err != nil {
+			return nil, err
+		}
+		if customTags[o.Tag] {
+			return nil, fmt.Errorf("出站 tag 重复: %s", o.Tag)
+		}
+		customTags[o.Tag] = true
+		cfg.Outbounds = append(cfg.Outbounds, obj)
 	}
+	// 链式引用必须指向已存在的出站，否则 Xray 启动即失败
+	for _, o := range in.Outbounds {
+		if o.Enabled && o.ProxyTag != "" && !customTags[o.ProxyTag] {
+			return nil, fmt.Errorf("出站 %s 的前置出站 %q 不存在或未启用", o.Tag, o.ProxyTag)
+		}
+	}
+	cfg.Outbounds = append(cfg.Outbounds,
+		map[string]any{"tag": "direct", "protocol": "freedom",
+			"settings": map[string]any{"domainStrategy": "UseIP"}},
+		map[string]any{"tag": "block", "protocol": "blackhole", "settings": map[string]any{}},
+	)
 
 	// ---- routing ----
+	// 顺序即优先级：先放用户自定义规则，再放内置兜底规则
 	rules := []map[string]any{}
+	for _, r := range in.Rules {
+		if !r.Enabled {
+			continue
+		}
+		if r.OutboundTag != "direct" && r.OutboundTag != "block" && !customTags[r.OutboundTag] {
+			return nil, fmt.Errorf("路由规则 %s 指向的出站 %q 不存在", r.ID, r.OutboundTag)
+		}
+		obj, err := RenderRoutingRule(r)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, obj)
+	}
 	if opts.EnableAPI {
 		// API 流量不走出站，直接由 Xray 内部处理
 		rules = append(rules, map[string]any{

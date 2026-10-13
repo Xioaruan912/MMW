@@ -768,6 +768,97 @@ MCP_GET="$(curl -s -o /dev/null -w '%{http_code}' -H "$MCP_AUTH" "$BASE/mcp")"
 MCP_NOAUTH="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/mcp" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}')"
 [[ "$MCP_NOAUTH" == "401" ]] && ok "MCP 无令牌被拒（401）" || bad "MCP 未鉴权: $MCP_NOAUTH"
 
+head_ "7d7. 出站 / 路由规则（链式代理与分流）"
+OB_CODE="$(curl -s -o "$WORK/ob.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/outbounds" -H 'Content-Type: application/json' -d "{
+    \"server_id\": \"$SERVER_ID\",
+    \"tag\": \"relay-jp\",
+    \"protocol\": \"vless\",
+    \"settings\": {\"servers\":[{\"address\":\"203.0.113.9\",\"port\":443,\"users\":[{\"id\":\"00000000-0000-4000-8000-000000000001\"}]}]},
+    \"remark\": \"日本中转\"
+  }")"
+OB_ID="$(cat "$WORK/ob.json" | jget outbound.id 2>/dev/null || echo '')"
+[[ "$OB_CODE" == "201" && -n "$OB_ID" ]] && ok "出站已创建" || bad "创建出站失败 HTTP $OB_CODE: $(head -c 200 "$WORK/ob.json")"
+
+DUP_OB="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/outbounds" -H 'Content-Type: application/json' \
+  -d "{\"server_id\":\"$SERVER_ID\",\"tag\":\"relay-jp\",\"protocol\":\"freedom\"}")"
+[[ "$DUP_OB" == "409" ]] && ok "同名出站 tag 被拒（409）" || bad "重名未校验: $DUP_OB"
+
+# 链式出站指向不存在的前置：应创建成功但给出 warning
+CH_CODE="$(curl -s -o "$WORK/ob-chain.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/outbounds" -H 'Content-Type: application/json' -d "{
+    \"server_id\":\"$SERVER_ID\",\"tag\":\"relay-2\",\"protocol\":\"freedom\",\"proxy_tag\":\"ghost\"
+  }")"
+[[ "$CH_CODE" == "201" ]] && grep -q 'warning' "$WORK/ob-chain.json" \
+  && ok "链式出站指向不存在的前置时给出 warning" || bad "缺少前置出站的提示: HTTP $CH_CODE"
+
+# 下发配置时，悬空引用必须让构建失败（而不是下发一份 Xray 起不来的配置）
+DANGLE_CODE="$(curl -s -o "$WORK/dangle.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/servers/$SERVER_ID/xray-preview")"
+[[ "$DANGLE_CODE" == "500" ]] && grep -q '前置出站' "$WORK/dangle.json" \
+  && ok "悬空链式引用导致构建失败（提前暴露，而不是下发坏配置）" \
+  || bad "悬空引用未被拦截: HTTP $DANGLE_CODE $(head -c 160 "$WORK/dangle.json")"
+
+# 删掉悬空出站
+CH_ID="$(cat "$WORK/ob-chain.json" | jget outbound.id 2>/dev/null || echo '')"
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X DELETE "$BASE/api/admin/outbounds/$CH_ID"
+
+# 路由规则：指向不存在的出站必须被拒
+BADRULE="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/routing-rules" -H 'Content-Type: application/json' \
+  -d "{\"server_id\":\"$SERVER_ID\",\"kind\":\"domain\",\"values\":[\"geosite:netflix\"],\"outbound_tag\":\"ghost\"}")"
+[[ "$BADRULE" == "400" ]] && ok "规则指向不存在的出站被拒（400）" || bad "悬空规则未校验: $BADRULE"
+
+BADKIND="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/routing-rules" -H 'Content-Type: application/json' \
+  -d "{\"server_id\":\"$SERVER_ID\",\"kind\":\"nonsense\",\"values\":[\"x\"],\"outbound_tag\":\"direct\"}")"
+[[ "$BADKIND" == "400" ]] && ok "未知规则类型被拒（400）" || bad "未知规则类型未校验: $BADKIND"
+
+EMPTYVAL="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/routing-rules" -H 'Content-Type: application/json' \
+  -d "{\"server_id\":\"$SERVER_ID\",\"kind\":\"domain\",\"values\":[],\"outbound_tag\":\"direct\"}")"
+[[ "$EMPTYVAL" == "400" ]] && ok "空匹配值被拒（400）" || bad "空匹配值未校验: $EMPTYVAL"
+
+# 合法规则
+RULE_CODE="$(curl -s -o "$WORK/rule.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X POST "$BASE/api/admin/routing-rules" -H 'Content-Type: application/json' -d "{
+    \"server_id\":\"$SERVER_ID\",\"kind\":\"domain\",\"values\":[\"geosite:netflix\",\"domain:example.com\"],
+    \"outbound_tag\":\"relay-jp\",\"remark\":\"流媒体走中转\",\"sort\":10
+  }")"
+RULE_ID="$(cat "$WORK/rule.json" | jget rule.id 2>/dev/null || echo '')"
+[[ "$RULE_CODE" == "201" && -n "$RULE_ID" ]] && ok "路由规则已创建" || bad "创建规则失败 HTTP $RULE_CODE"
+
+# 配置里应同时出现自定义出站与规则，且自定义规则优先
+curl -s -o "$WORK/preview2.json" -b "$COOKIE" "$BASE/api/admin/servers/$SERVER_ID/xray-preview"
+python3 - "$WORK/preview2.json" <<'PY' && ok "配置含自定义出站与规则，且规则顺序正确" || bad "配置生成异常"
+import json, sys
+c = json.load(open(sys.argv[1]))['config']
+tags = [o['tag'] for o in c['outbounds']]
+assert 'relay-jp' in tags, tags
+assert tags.index('relay-jp') < tags.index('direct'), f"自定义出站应排在 direct 之前: {tags}"
+rules = c['routing']['rules']
+assert rules, '缺少路由规则'
+assert rules[0]['outboundTag'] == 'relay-jp', f"自定义规则应优先匹配: {rules[0]}"
+assert 'domain' in rules[0], rules[0]
+assert any(r.get('outboundTag') == 'block' for r in rules), '缺少内置 block 规则'
+PY
+
+# 被规则引用的出站不可删除
+DELREF="$(curl -s -o "$WORK/delref.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X DELETE "$BASE/api/admin/outbounds/$OB_ID")"
+[[ "$DELREF" == "409" ]] && grep -q '引用' "$WORK/delref.json" \
+  && ok "被规则引用的出站拒绝删除（409）" || bad "引用中的出站被删了: $DELREF"
+
+# 解除引用后可以删
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X DELETE "$BASE/api/admin/routing-rules/$RULE_ID"
+DELOK="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" \
+  -X DELETE "$BASE/api/admin/outbounds/$OB_ID")"
+[[ "$DELOK" == "200" ]] && ok "解除引用后可删除出站" || bad "解除引用后仍无法删除: $DELOK"
+
+# 清理后配置应能正常生成
+curl -s -o "$WORK/preview3.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/servers/$SERVER_ID/xray-preview" >/dev/null
+grep -q '"inbounds"' "$WORK/preview3.json" && ok "清理后配置生成正常" || bad "清理后配置生成失败"
+
 head_ "7e. 任务持久化与 Pull 降级通道"
 TASKS_CODE="$(curl -s -o "$WORK/tasks.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/tasks?server_id=$SERVER_ID")"
 TASKS_N="$(cat "$WORK/tasks.json" | jget total 2>/dev/null || echo 0)"

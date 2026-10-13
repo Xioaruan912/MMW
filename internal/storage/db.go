@@ -222,6 +222,41 @@ func (db *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrationV10SQL 是出站与路由规则。
+const migrationV10SQL = `
+CREATE TABLE IF NOT EXISTS outbounds (
+    id           TEXT PRIMARY KEY,
+    server_id    TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    tag          TEXT NOT NULL,
+    protocol     TEXT NOT NULL,
+    settings     TEXT NOT NULL DEFAULT '{}',
+    stream       TEXT NOT NULL DEFAULT '{}',
+    proxy_tag    TEXT NOT NULL DEFAULT '',
+    send_through TEXT NOT NULL DEFAULT '',
+    remark       TEXT NOT NULL DEFAULT '',
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    sort         INTEGER NOT NULL DEFAULT 0,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    UNIQUE(server_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_outbounds_server ON outbounds(server_id);
+
+CREATE TABLE IF NOT EXISTS routing_rules (
+    id           TEXT PRIMARY KEY,
+    server_id    TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    sort         INTEGER NOT NULL DEFAULT 0,
+    kind         TEXT NOT NULL,
+    values_json  TEXT NOT NULL DEFAULT '[]',
+    outbound_tag TEXT NOT NULL,
+    remark       TEXT NOT NULL DEFAULT '',
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_routing_server ON routing_rules(server_id);
+`
+
 // migrationV9SQL 是套餐与兑换码。
 const migrationV9SQL = `
 CREATE TABLE IF NOT EXISTS packages (
@@ -430,6 +465,11 @@ func init() {
 		Version: 9,
 		Name:    "packages_and_redeem_codes",
 		SQL:     migrationV9SQL,
+	})
+	migrations = append(migrations, migration{
+		Version: 10,
+		Name:    "outbounds_and_routing_rules",
+		SQL:     migrationV10SQL,
 	})
 }
 

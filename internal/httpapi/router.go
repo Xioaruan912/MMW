@@ -112,6 +112,16 @@ func (s *Server) Routes() http.Handler {
 		pr.Get("/api/admin/nodes", s.handleListNodes)
 		pr.Patch("/api/admin/nodes/{id}", s.handleUpdateNode)
 
+		// ---- 出站 / 路由规则（链式代理、分流出口）----
+		pr.Get("/api/admin/outbounds", s.handleListOutbounds)
+		pr.Post("/api/admin/outbounds", s.handleCreateOutbound)
+		pr.Patch("/api/admin/outbounds/{id}", s.handleUpdateOutbound)
+		pr.Delete("/api/admin/outbounds/{id}", s.handleDeleteOutbound)
+		pr.Get("/api/admin/routing-rules", s.handleListRoutingRules)
+		pr.Post("/api/admin/routing-rules", s.handleCreateRoutingRule)
+		pr.Patch("/api/admin/routing-rules/{id}", s.handleUpdateRoutingRule)
+		pr.Delete("/api/admin/routing-rules/{id}", s.handleDeleteRoutingRule)
+
 		// ---- Xray 配置 ----
 		pr.Post("/api/admin/servers/{id}/apply", s.handleApplyXray)
 		pr.Get("/api/admin/servers/{id}/xray-preview", s.handleXrayPreview)
