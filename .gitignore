@@ -1,0 +1,37 @@
+# 构建产物
+bin/
+dist/
+*.exe
+*.test
+*.out
+
+# 运行时数据
+data/
+run/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# 前端
+web/node_modules/
+web/dist/
+web/.vite/
+
+# 密钥与本地配置
+*.key
+master_ed25519.*
+config.local.yaml
+.env
+.env.local
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 临时
+*.tmp
+*.bak
+__pycache__/
