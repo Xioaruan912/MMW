@@ -333,6 +333,44 @@ grep -q "^vless://" "$WORK/sub-plain.txt" && ok "format=uri 返回明文 URI" ||
 curl -s -o /dev/null -w '%{http_code}' "$BASE/sub/not-a-real-token" > "$WORK/bad.tmp"
 [[ "$(cat "$WORK/bad.tmp")" == "404" ]] && ok "无效订阅凭据返回 404" || bad "无效凭据未拒绝"
 
+head_ "7d2. 订阅格式矩阵"
+FMT_CODE="$(curl -s -o "$WORK/formats.json" -w '%{http_code}' "$BASE/sub/formats")"
+[[ "$FMT_CODE" == "200" ]] && ok "订阅格式列表 200" || bad "格式列表 HTTP $FMT_CODE"
+# 用 grep 计数而不是把含中文的 JSON 再喂给 python：
+# 在 ASCII locale 下 python 写 stdout 会抛 UnicodeEncodeError，管道会静默拿到空串。
+FMT_N="$(grep -o '"format":' "$WORK/formats.json" | wc -l | tr -d ' ')"
+[[ "$FMT_N" -ge 10 ]] && ok "已声明 $FMT_N 种订阅格式" || bad "格式数量偏少: $FMT_N"
+
+# Surge：INI 家族，应含 [Proxy] 段与 REALITY 参数
+curl -s -o "$WORK/sub-surge.conf" "$BASE/sub/$SUB_TOKEN?format=surge"
+grep -q '^\[Proxy\]' "$WORK/sub-surge.conf" && ok "Surge 输出含 [Proxy] 段" || bad "Surge 段缺失"
+grep -q "reality-public-key=" "$WORK/sub-surge.conf" && ok "Surge 输出含 REALITY 公钥" || bad "Surge 缺少 REALITY"
+grep -q "香港-01 = vless" "$WORK/sub-surge.conf" && ok "Surge 节点行格式正确" || bad "Surge 节点行异常"
+
+# Loon
+curl -s -o "$WORK/sub-loon.conf" "$BASE/sub/$SUB_TOKEN?format=loon"
+grep -q "香港-01 = VLESS" "$WORK/sub-loon.conf" && ok "Loon 节点行格式正确" || bad "Loon 节点行异常"
+grep -q "public-key=" "$WORK/sub-loon.conf" && ok "Loon 输出含 REALITY 公钥" || bad "Loon 缺少 REALITY"
+
+# Egern：YAML，用 policy_groups 而非 proxy-groups
+curl -s -o "$WORK/sub-egern.yaml" "$BASE/sub/$SUB_TOKEN?format=egern"
+grep -q "policy_groups:" "$WORK/sub-egern.yaml" && ok "Egern 使用 policy_groups" || bad "Egern 结构异常"
+grep -q "proxy-groups" "$WORK/sub-egern.yaml" && bad "Egern 不应出现 Clash 的 proxy-groups" || ok "Egern 未混入 Clash 结构"
+
+# UA 分流：Surge UA 应直接拿到 Surge 格式
+curl -s -o "$WORK/sub-ua.conf" -A 'Surge/5.9.0' "$BASE/sub/$SUB_TOKEN"
+grep -q '^\[Proxy\]' "$WORK/sub-ua.conf" && ok "按 Surge UA 自动分流到 Surge 格式" || bad "UA 分流未生效"
+
+# 不支持 REALITY 的客户端必须明确报错，而不是给一份导入即错的配置
+for f in surfboard qx; do
+  code="$(curl -s -o "$WORK/sub-$f.out" -w '%{http_code}' "$BASE/sub/$SUB_TOKEN?format=$f")"
+  if [[ "$code" == "500" ]] && grep -q "不支持 REALITY" "$WORK/sub-$f.out"; then
+    ok "$f 对 REALITY 明确报错（不静默降级）"
+  else
+    bad "$f 应当拒绝 REALITY，实得 HTTP $code: $(head -c 160 "$WORK/sub-$f.out")"
+  fi
+done
+
 head_ "7e. 任务持久化与 Pull 降级通道"
 TASKS_CODE="$(curl -s -o "$WORK/tasks.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/tasks?server_id=$SERVER_ID")"
 TASKS_N="$(cat "$WORK/tasks.json" | jget total 2>/dev/null || echo 0)"

@@ -235,6 +235,8 @@ export const api = {
       method: 'POST',
     }),
   subURL: (token: string) => `${location.origin}/sub/${token}`,
+  subFormats: () =>
+    request<{ formats: { format: string; label: string; url: string }[] }>('/sub/formats'),
   overview: () =>
     request<{
       servers_total: number

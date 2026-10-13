@@ -157,28 +157,6 @@ func TestRenderClashContainsEssentials(t *testing.T) {
 	}
 }
 
-func TestDetectFormatByUA(t *testing.T) {
-	cases := map[string]Format{
-		"clash-verge/1.7.0":   FormatClash,
-		"mihomo/1.18":         FormatClash,
-		"Stash/2.5":           FormatClash, // Stash 兼容 Clash
-		"Surfboard/2.0":       FormatClash,
-		"Shadowrocket/2.2.30": FormatBase64,
-		"v2rayN/6.0":          FormatBase64,
-		"sing-box/1.9":        FormatSingBox,
-		"":                    FormatClash,
-		// 私有格式必须被识别出来，而不是被静默降级
-		"Surge/5.0":   FormatSurge,
-		"Loon/3.2":    FormatLoon,
-		"QuantumultX": FormatQX,
-	}
-	for ua, want := range cases {
-		if got := DetectFormat(ua); got != want {
-			t.Errorf("UA %q 期望 %s 实得 %s", ua, want, got)
-		}
-	}
-}
-
 func TestBuildEntriesSkipsMissingCredentials(t *testing.T) {
 	nodes := []storage.NodeView{realityNode()}
 	entries := BuildEntries(nodes, map[string]storage.InboundClient{})
@@ -211,27 +189,217 @@ func TestRenderSingBoxOutbound(t *testing.T) {
 	}
 }
 
-// TestUnimplementedFormatsFailLoudly 回归：Surge/Loon/QX 不得被静默降级成
-// Clash YAML —— 那会让用户拿到一份"看着像配置、实则不可用"的文件。
-func TestUnimplementedFormatsFailLoudly(t *testing.T) {
-	entries := []Entry{{
-		Node:   realityNode(),
-		Client: storage.InboundClient{UUID: "u", Enabled: true},
-		Spec:   inbound.Parse(realityNode().Inbound),
-	}}
-	for f, stage := range UnimplementedFormats() {
-		_, _, err := Render(entries, f)
-		if err == nil {
-			t.Fatalf("格式 %s 尚未实现，必须返回错误", f)
+// TestAllSupportedFormatsRender 遍历全部已声明支持的格式，确保都能产出内容。
+// 这条测试的价值在于：新增格式时忘了接进 Render 会立刻被抓到。
+// tlsNode 返回一个所有客户端都支持的节点（VLESS + TCP + TLS）。
+// REALITY 并非每个客户端都支持（Surfboard / QX 明确不支持），
+// 所以「全格式可渲染」这条测试必须用最通用的组合。
+func tlsNode() storage.NodeView {
+	n := realityNode()
+	n.Inbound.Security = inbound.SecurityTLS
+	n.Inbound.Stream = `{"server_name":"a.example.com"}`
+	return n
+}
+
+func entryOf(n storage.NodeView) Entry {
+	return Entry{
+		Node:   n,
+		Client: storage.InboundClient{UUID: "uuid-1", Email: "alice", Enabled: true},
+		Spec:   inbound.Parse(n.Inbound),
+	}
+}
+
+// TestAllSupportedFormatsRender 遍历全部已声明支持的格式。
+// 价值：新增格式时忘了接进 Render 会立刻被抓到。
+func TestAllSupportedFormatsRender(t *testing.T) {
+	entries := []Entry{entryOf(tlsNode())}
+	for _, f := range SupportedFormats() {
+		body, ctype, err := Render(entries, f)
+		if err != nil {
+			t.Errorf("格式 %s 渲染失败: %v", f, err)
+			continue
 		}
-		if !strings.Contains(err.Error(), stage) {
-			t.Fatalf("错误信息应指出计划阶段 %s，实得: %v", stage, err)
+		if len(body) == 0 {
+			t.Errorf("格式 %s 输出为空", f)
+		}
+		if ctype == "" {
+			t.Errorf("格式 %s 未返回 Content-Type", f)
 		}
 	}
 	if _, _, err := Render(entries, Format("bogus")); err == nil {
 		t.Fatal("未知格式必须返回错误")
 	}
-	if _, _, err := Render(entries, FormatStash); err != nil {
-		t.Fatalf("Stash 应可用（走 Clash 渲染）: %v", err)
+}
+
+// TestRealitySupportMatrix 明确记录哪些客户端支持 REALITY。
+// 不支持的要**报错而不是静默降级** —— 静默降级会让用户以为连上了其实没有。
+func TestRealitySupportMatrix(t *testing.T) {
+	entries := []Entry{entryOf(realityNode())}
+
+	supports := []Format{FormatClash, FormatEgern, FormatURI, FormatBase64, FormatSurge, FormatLoon, FormatSingBox}
+	for _, f := range supports {
+		if _, _, err := Render(entries, f); err != nil {
+			t.Errorf("格式 %s 应当支持 REALITY，实得错误: %v", f, err)
+		}
+	}
+
+	rejects := []Format{FormatSurfboard, FormatQX}
+	for _, f := range rejects {
+		if _, _, err := Render(entries, f); err == nil {
+			t.Errorf("格式 %s 不支持 REALITY，必须报错（不得静默降级）", f)
+		}
+	}
+}
+
+func TestSurgeRendering(t *testing.T) {
+	entries := []Entry{{
+		Node:   realityNode(),
+		Client: storage.InboundClient{UUID: "uuid-1", Enabled: true},
+		Spec:   inbound.Parse(realityNode().Inbound),
+	}}
+	out, err := RenderSurge(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"[Proxy]", "[Proxy Group]", "[Rule]",
+		"香港-01 = vless, 1.2.3.4, 443",
+		"username=uuid-1",
+		"tls=true",
+		"sni=www.example.com",
+		"reality-public-key=",
+		"reality-short-id=0123456789abcdef",
+		"flow=xtls-rprx-vision",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("Surge 输出缺少 %q:\n%s", want, s)
+		}
+	}
+}
+
+func TestSurgeRejectsUnsupported(t *testing.T) {
+	// httpupgrade 在 Surge 里没有对应语义 —— 必须报错而不是静默降级
+	e := Entry{
+		Node:   realityNode(),
+		Client: storage.InboundClient{UUID: "u", Enabled: true},
+		Spec:   inbound.Parse(realityNode().Inbound),
+	}
+	e.Node.Inbound.Transport = inbound.TransportHTTPUpgrade
+	e.Spec = inbound.Parse(e.Node.Inbound)
+	e.Spec.Stream.HTTPUpgradePath = "/x"
+	if _, err := RenderSurge([]Entry{e}); err == nil {
+		t.Fatal("Surge 不支持 httpupgrade，应当报错")
+	}
+}
+
+func TestSurfboardRejectsReality(t *testing.T) {
+	entries := []Entry{{
+		Node:   realityNode(),
+		Client: storage.InboundClient{UUID: "u", Enabled: true},
+		Spec:   inbound.Parse(realityNode().Inbound),
+	}}
+	if _, err := RenderSurfboard(entries); err == nil {
+		t.Fatal("Surfboard 不支持 REALITY，应当报错而不是静默降级")
+	}
+}
+
+func TestLoonRendering(t *testing.T) {
+	entries := []Entry{{
+		Node:   realityNode(),
+		Client: storage.InboundClient{UUID: "uuid-1", Enabled: true},
+		Spec:   inbound.Parse(realityNode().Inbound),
+	}}
+	out, err := RenderLoon(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"[Proxy]",
+		"香港-01 = VLESS, 1.2.3.4, 443",
+		`"uuid-1"`,
+		"over-tls=true",
+		"tls-name=www.example.com",
+		"public-key=",
+		"short-id=0123456789abcdef",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("Loon 输出缺少 %q:\n%s", want, s)
+		}
+	}
+}
+
+func TestQuantumultXRendering(t *testing.T) {
+	// QX 不支持 REALITY：换成一个 TLS 节点来验证正常路径
+	n := realityNode()
+	n.Inbound.Security = inbound.SecurityTLS
+	n.Inbound.Stream = `{"server_name":"a.example.com"}`
+	n.Inbound.Protocol = inbound.ProtoVLESS
+	entries := []Entry{{
+		Node: n, Client: storage.InboundClient{UUID: "uuid-1", Enabled: true},
+		Spec: inbound.Parse(n.Inbound),
+	}}
+	out, err := RenderQuantumultX(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{"[server_local]", "vless=1.2.3.4:443", "password=uuid-1", "obfs=over-tls", "obfs-host=a.example.com", "tag=香港-01"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("QX 输出缺少 %q:\n%s", want, s)
+		}
+	}
+
+	// REALITY 必须被拒
+	r := Entry{
+		Node: realityNode(), Client: storage.InboundClient{UUID: "u", Enabled: true},
+		Spec: inbound.Parse(realityNode().Inbound),
+	}
+	if _, err := RenderQuantumultX([]Entry{r}); err == nil {
+		t.Fatal("QX 不支持 REALITY，应当报错")
+	}
+}
+
+func TestEgernRendering(t *testing.T) {
+	entries := []Entry{{
+		Node:   realityNode(),
+		Client: storage.InboundClient{UUID: "uuid-1", Enabled: true},
+		Spec:   inbound.Parse(realityNode().Inbound),
+	}}
+	out, err := RenderEgern(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{"proxies:", "policy_groups:", "policies:", "香港-01", "reality-opts"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("Egern 输出缺少 %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "proxy-groups") {
+		t.Fatal("Egern 使用 policy_groups，不应出现 Clash 的 proxy-groups")
+	}
+}
+
+func TestDetectFormatByUAAll(t *testing.T) {
+	cases := map[string]Format{
+		"clash-verge/1.7.0":   FormatClash,
+		"mihomo/1.18":         FormatClash,
+		"Stash/2.5":           FormatClash,
+		"Surge/5.0":           FormatSurge,
+		"Surfboard/2.0":       FormatSurfboard,
+		"Loon/3.2":            FormatLoon,
+		"Quantumult X/1.0":    FormatQX,
+		"Egern/1.0":           FormatEgern,
+		"Shadowrocket/2.2.30": FormatShadowrocket,
+		"v2rayN/6.0":          FormatBase64,
+		"sing-box/1.9":        FormatSingBox,
+		"":                    FormatClash,
+	}
+	for ua, want := range cases {
+		if got := DetectFormat(ua); got != want {
+			t.Errorf("UA %q 期望 %s 实得 %s", ua, want, got)
+		}
 	}
 }

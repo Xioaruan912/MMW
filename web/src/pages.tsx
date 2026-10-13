@@ -684,19 +684,31 @@ function SubscriptionDialog({
 
 function SubscriptionLinks({ user }: { user: UserItem }) {
   const base = api.subURL(user.sub_token)
+  const [formats, setFormats] = useState<{ format: string; label: string }[] | null>(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    api
+      .subFormats()
+      .then((r) => setFormats(r.formats))
+      .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)))
+  }, [])
+
+  // 「自动识别」放在首位：客户端按 UA 拿对应格式，用户多数场景不需要关心格式名
   const items: [string, string][] = [
-    ['Clash / mihomo', `${base}?format=clash`],
-    ['通用（base64 URI）', base],
-    ['明文 URI 列表', `${base}?format=uri`],
-    ['sing-box', `${base}?format=singbox`],
+    ['自动识别（按 UA）', base],
+    ...(formats ?? []).map((f) => [f.label, `${base}?format=${f.format}`] as [string, string]),
   ]
+
   return (
     <>
       <p className="muted small">
         订阅地址凭 token 访问，请勿泄露。客户端请求时会按 UA 自动分流；也可用 ?format= 强制指定。
       </p>
+      {err && <div className="err">{err}</div>}
+      {!formats && !err && <div className="muted small">加载格式列表…</div>}
       {items.map(([label, url]) => (
-        <div key={label} className="link-row">
+        <div key={url} className="link-row">
           <div className="muted small">{label}</div>
           <input readOnly value={url} onFocus={(e) => e.currentTarget.select()} />
           <button
@@ -710,7 +722,8 @@ function SubscriptionLinks({ user }: { user: UserItem }) {
         </div>
       ))}
       <div className="muted small">
-        注意：Surge / Loon / QuantumultX 使用私有格式，本版本尚未支持，请在客户端侧手动指定 clash 或 uri。
+        提示：Surge / Loon / Quantumult X 各有私有格式；Surfboard 与 QX 不支持 REALITY ——
+        遇到不支持的组合时服务端会明确报错，而不是给你一份导入即失败的配置。
       </div>
     </>
   )

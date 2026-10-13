@@ -200,34 +200,20 @@ const (
 	FormatV2Ray   Format = "v2ray"  // 与 base64 相同，语义更明确
 	FormatSingBox Format = "singbox"
 	FormatStash   Format = "stash" // Stash 兼容 Clash，实际走 FormatClash
-)
 
-// 已识别但尚未实现的格式。
-//
-// 这些客户端的配置格式与 Clash / URI 都不同，因此**不能静默降级**——
-// 否则用户拿到一份看着像配置、实则不可用的文件，排障成本极高。
-const (
-	FormatSurge Format = "surge"
-	FormatLoon  Format = "loon"
-	FormatQX    Format = "qx"
+	// 以下为 INI / 私有 YAML 家族，各自有独立渲染器
+	FormatSurge        Format = "surge"
+	FormatSurfboard    Format = "surfboard"
+	FormatLoon         Format = "loon"
+	FormatQX           Format = "qx"
+	FormatEgern        Format = "egern"
+	FormatShadowrocket Format = "shadowrocket" // Shadowrocket 吃 base64 URI
 )
-
-// UnimplementedFormats 返回尚未实现的格式及其计划阶段。
-func UnimplementedFormats() map[Format]string {
-	return map[Format]string{
-		FormatSurge: "P7",
-		FormatLoon:  "P7",
-		FormatQX:    "P7",
-	}
-}
 
 // DetectFormat 按 User-Agent 猜测客户端期望的格式。
 //
-// 只做**语义正确**的映射：
-//   - Clash / mihomo / Stash / Surfboard / ClashX 家族 → Clash YAML
-//   - Shadowrocket / v2rayN / NekoBox / Hiddify 等 → base64 包装的 URI 列表
-//   - sing-box → JSON
-//   - Surge / Loon / QuantumultX → 各自的私有格式（尚未实现，返回明确错误而非降级）
+// 只做**语义正确**的映射：把客户端领到它真正能读的格式上，
+// 而不是给它一份“看着像配置但导入即报错”的文件。
 func DetectFormat(ua string) Format {
 	u := strings.ToLower(ua)
 	switch {
@@ -237,16 +223,23 @@ func DetectFormat(ua string) Format {
 		return FormatSingBox
 	case strings.Contains(u, "surge"):
 		return FormatSurge
+	case strings.Contains(u, "surfboard"):
+		return FormatSurfboard
 	case strings.Contains(u, "loon"):
 		return FormatLoon
 	case strings.Contains(u, "quantumult"):
 		return FormatQX
-	case strings.Contains(u, "clash"), strings.Contains(u, "mihomo"),
-		strings.Contains(u, "stash"), strings.Contains(u, "surfboard"):
+	case strings.Contains(u, "egern"):
+		return FormatEgern
+	case strings.Contains(u, "stash"):
+		return FormatClash // Stash 兼容 Clash
+	case strings.Contains(u, "clash"), strings.Contains(u, "mihomo"):
 		return FormatClash
-	case strings.Contains(u, "shadowrocket"), strings.Contains(u, "v2ray"),
-		strings.Contains(u, "v2rayn"), strings.Contains(u, "nekobox"),
-		strings.Contains(u, "karing"), strings.Contains(u, "hiddify"):
+	case strings.Contains(u, "shadowrocket"):
+		return FormatShadowrocket
+	case strings.Contains(u, "v2ray"), strings.Contains(u, "v2rayn"),
+		strings.Contains(u, "nekobox"), strings.Contains(u, "karing"),
+		strings.Contains(u, "hiddify"):
 		return FormatBase64
 	default:
 		return FormatClash
@@ -260,7 +253,27 @@ func Render(entries []Entry, f Format) ([]byte, string, error) {
 		b, err := RenderClash(entries, DefaultClashOptions())
 		return b, "text/yaml; charset=utf-8", err
 
-	case FormatURI:
+	case FormatEgern:
+		b, err := RenderEgern(entries)
+		return b, "text/yaml; charset=utf-8", err
+
+	case FormatSurge:
+		b, err := RenderSurge(entries)
+		return b, "text/plain; charset=utf-8", err
+
+	case FormatSurfboard:
+		b, err := RenderSurfboard(entries)
+		return b, "text/plain; charset=utf-8", err
+
+	case FormatLoon:
+		b, err := RenderLoon(entries)
+		return b, "text/plain; charset=utf-8", err
+
+	case FormatQX:
+		b, err := RenderQuantumultX(entries)
+		return b, "text/plain; charset=utf-8", err
+
+	case FormatURI, FormatShadowrocket:
 		uris, err := RenderURIs(entries)
 		if err != nil {
 			return nil, "", err
@@ -272,18 +285,52 @@ func Render(entries []Entry, f Format) ([]byte, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		plain := strings.Join(uris, "\n") + "\n"
-		return []byte(base64Std(plain)), "text/plain; charset=utf-8", nil
+		return []byte(base64Std(strings.Join(uris, "\n") + "\n")), "text/plain; charset=utf-8", nil
 
 	case FormatSingBox:
 		b, err := RenderSingBox(entries)
 		return b, "application/json; charset=utf-8", err
 
 	default:
-		if stage, ok := UnimplementedFormats()[f]; ok {
-			return nil, "", fmt.Errorf(
-				"订阅格式 %q 尚未实现（计划于 %s）；请用 ?format=clash 或 ?format=uri 手动指定", f, stage)
-		}
 		return nil, "", fmt.Errorf("不支持的订阅格式 %q", f)
+	}
+}
+
+// SupportedFormats 返回全部可用的订阅格式（供 API 与前文档展示）。
+func SupportedFormats() []Format {
+	return []Format{
+		FormatClash, FormatEgern, FormatURI, FormatBase64, FormatV2Ray,
+		FormatSingBox, FormatStash, FormatSurge, FormatSurfboard,
+		FormatLoon, FormatQX, FormatShadowrocket,
+	}
+}
+
+// FormatLabel 返回格式的中文名（供前端展示）。
+func FormatLabel(f Format) string {
+	switch f {
+	case FormatClash:
+		return "Clash / mihomo（YAML）"
+	case FormatStash:
+		return "Stash（兼容 Clash）"
+	case FormatEgern:
+		return "Egern（YAML）"
+	case FormatSurge:
+		return "Surge"
+	case FormatSurfboard:
+		return "Surfboard"
+	case FormatLoon:
+		return "Loon"
+	case FormatQX:
+		return "Quantumult X"
+	case FormatSingBox:
+		return "sing-box（JSON）"
+	case FormatURI:
+		return "明文 URI 列表"
+	case FormatShadowrocket:
+		return "Shadowrocket（明文 URI）"
+	case FormatBase64, FormatV2Ray:
+		return "base64 URI（v2rayN / NekoBox 等通用）"
+	default:
+		return string(f)
 	}
 }

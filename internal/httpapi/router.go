@@ -30,6 +30,7 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/agent/pull", s.handleAgentPull)
 
 	// ---- 订阅出口（公开，凭据即权限）----
+	r.Get("/sub/formats", s.handleSubscriptionFormats)
 	r.Get("/sub/{token}", s.handleSubscription)
 
 	// ---- 远程安装 ----

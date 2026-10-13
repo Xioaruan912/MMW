@@ -476,6 +476,20 @@ func (s *Server) subscriptionURL(token string) string {
 // 订阅出口（公开，凭据即权限）
 // ---------------------------------------------------------------------------
 
+// handleSubscriptionFormats 列出可用的订阅格式（公开）。
+func (s *Server) handleSubscriptionFormats(w http.ResponseWriter, r *http.Request) {
+	formats := subscription.SupportedFormats()
+	out := make([]map[string]any, 0, len(formats))
+	for _, f := range formats {
+		out = append(out, map[string]any{
+			"format": string(f),
+			"label":  subscription.FormatLabel(f),
+			"url":    "{sub_url}?format=" + string(f),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"formats": out})
+}
+
 // handleSubscription 按凭据输出订阅内容；格式由 UA 或 ?format= 决定。
 func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request) {
 	token := chi.URLParam(r, "token")
