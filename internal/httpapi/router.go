@@ -52,6 +52,7 @@ func (s *Server) Routes() http.Handler {
 		pr.Post("/api/me/totp/setup", s.handleTOTPSetup)
 		pr.Post("/api/me/totp/enable", s.handleTOTPEnable)
 		pr.Post("/api/me/totp/disable", s.handleTOTPDisable)
+		pr.Get("/api/me/traffic", s.handleMyTraffic)
 		pr.Get("/api/me/tokens", s.handleListAPITokens)
 		pr.Post("/api/me/tokens", s.handleCreateAPIToken)
 		pr.Delete("/api/me/tokens/{id}", s.handleRevokeAPIToken)
@@ -101,6 +102,8 @@ func (s *Server) Routes() http.Handler {
 		pr.Patch("/api/admin/users/{id}", s.handleUpdateUser)
 		pr.Delete("/api/admin/users/{id}", s.handleDeleteUser)
 		pr.Post("/api/admin/users/{id}/sub-token", s.handleRotateSubToken)
+		pr.Get("/api/admin/users/{id}/traffic", s.handleUserTraffic)
+		pr.Get("/api/admin/traffic", s.handleTrafficSummary)
 	})
 
 	// ---- 前端静态资源 ----

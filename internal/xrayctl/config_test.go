@@ -32,8 +32,28 @@ func TestBuildProducesExpectedShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构建失败: %v", err)
 	}
-	if len(res.Config.Inbounds) != 1 {
-		t.Fatalf("应有 1 个入站，得到 %d", len(res.Config.Inbounds))
+	// 启用 API 时配置里会有 2 个入站：api（dokodemo-door）+ 业务入站。
+	// 缺少 api 入站的话，stats/在线人数查询根本不可用 —— 这是曾经的真实缺陷。
+	if len(res.Config.Inbounds) != 2 {
+		t.Fatalf("应有 2 个入站（api + 业务），得到 %d", len(res.Config.Inbounds))
+	}
+	var apiInbound map[string]any
+	for _, in := range res.Config.Inbounds {
+		if in["tag"] == APITag {
+			apiInbound = in
+		}
+	}
+	if apiInbound == nil {
+		t.Fatal("缺少 API 入站（dokodemo-door），统计功能将不可用")
+	}
+	if apiInbound["listen"] != "127.0.0.1" {
+		t.Fatalf("API 入站必须只监听回环地址，实得 %v", apiInbound["listen"])
+	}
+	if apiInbound["protocol"] != "dokodemo-door" {
+		t.Fatalf("API 入站协议应为 dokodemo-door，实得 %v", apiInbound["protocol"])
+	}
+	if res.APIPort() == 0 {
+		t.Fatal("APIPort() 应当能从配置里解析出端口")
 	}
 	if len(res.Config.Outbounds) != 2 {
 		t.Fatalf("应有 direct/block 两个出站，得到 %d", len(res.Config.Outbounds))
@@ -100,11 +120,14 @@ func TestDisabledInboundExcluded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Config.Inbounds) != 0 {
-		t.Fatalf("被禁用的入站不应出现在配置里：%+v", res.Config.Inbounds)
+	// 被禁用的业务入站不应出现；api 入站与业务入站无关，始终存在
+	for _, in := range res.Config.Inbounds {
+		if in["tag"] == "in-443" {
+			t.Fatalf("被禁用的入站不应出现在配置里：%+v", in)
+		}
 	}
 	if len(res.Tags) != 0 {
-		t.Fatal("tags 应为空")
+		t.Fatalf("tags 应为空，实得 %v", res.Tags)
 	}
 }
 
@@ -152,5 +175,39 @@ func TestCanonicalIsOrderIndependent(t *testing.T) {
 	bb, _ := Canonical(rb.Config)
 	if string(ba) != string(bb) {
 		t.Fatal("规范化 JSON 应当逐字节一致")
+	}
+}
+
+func TestAPIPortParsedFromConfig(t *testing.T) {
+	opts := DefaultOptions()
+	opts.APIPort = 10999
+	in := sampleInbound("in-443", 443)
+	res, err := Build([]storage.Inbound{in}, nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.APIPort(); got != 10999 {
+		t.Fatalf("APIPort 应为 10999，得到 %d", got)
+	}
+}
+
+func TestAPIDisabledNoInbound(t *testing.T) {
+	opts := DefaultOptions()
+	opts.EnableAPI = false
+	in := sampleInbound("in-443", 443)
+	res, err := Build([]storage.Inbound{in}, nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range res.Config.Inbounds {
+		if x["tag"] == APITag {
+			t.Fatal("关闭 API 后不应有 api 入站")
+		}
+	}
+	if res.APIPort() != 0 {
+		t.Fatal("关闭 API 后 APIPort 应为 0")
+	}
+	if res.Config.API != nil || res.Config.Stats != nil {
+		t.Fatal("关闭 API 后不应有 api / stats 段")
 	}
 }

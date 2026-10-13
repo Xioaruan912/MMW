@@ -25,6 +25,7 @@ import (
 	"github.com/mmx-project/mmx/internal/httpapi"
 	"github.com/mmx-project/mmx/internal/logging"
 	"github.com/mmx-project/mmx/internal/storage"
+	"github.com/mmx-project/mmx/internal/traffic"
 	"github.com/mmx-project/mmx/internal/version"
 	"github.com/mmx-project/mmx/internal/webui"
 	"github.com/mmx-project/mmx/internal/xrayctl"
@@ -97,6 +98,12 @@ func run() error {
 		PublicKey:     pub,
 	})
 	hub := agentlink.NewHub(log, store, reg, priv, cfg.AgentTokenReuseLock, cfg.TrustProxy)
+
+	// 流量归集：指标里的服务器增量 + 定期向 Agent 拉取每用户用量
+	trafficAgg := traffic.NewAggregator(store, log)
+	hub.OnMetrics = trafficAgg.OnMetrics
+	puller := traffic.NewPuller(store, hub, log, 5*time.Minute)
+	go puller.Run(ctx)
 
 	sweeper := agentlink.NewSweeper(log, reg, hub, 30*time.Second, 30*24*time.Hour)
 	go sweeper.Run(ctx)

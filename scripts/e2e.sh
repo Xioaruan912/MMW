@@ -385,6 +385,59 @@ NOAUTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/agent/p
   -H "Authorization: Bearer not-a-real-token" -H 'Content-Type: application/json' -d '{}')"
 [[ "$NOAUTH_CODE" == "401" ]] && ok "Pull 通道拒绝无效令牌（401）" || bad "Pull 鉴权失效: $NOAUTH_CODE"
 
+head_ "7f. 流量统计与配额"
+TR_CODE="$(curl -s -o "$WORK/traffic.json" -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/traffic?days=30")"
+[[ "$TR_CODE" == "200" ]] && ok "全局流量汇总 200" || bad "流量汇总 HTTP $TR_CODE"
+python3 - "$WORK/traffic.json" <<'PY' && ok "汇总结构正确（days/series/总数）" || bad "汇总结构异常"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d['days'] == 30, d.get('days')
+s = d['summary']
+assert 'series' in s and isinstance(s['series'], list)
+assert s['total'] == s['up'] + s['down']
+PY
+
+SRV_TR="$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE" "$BASE/api/admin/traffic?server_id=$SERVER_ID&days=7")"
+[[ "$SRV_TR" == "200" ]] && ok "单服务器流量汇总 200" || bad "单服务器汇总 HTTP $SRV_TR"
+
+# 配额判定：设一个上限并观察淘汰逻辑
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X PATCH "$BASE/api/admin/users/$USER_ID" \
+  -H 'Content-Type: application/json' -d '{"traffic_limit":1000,"traffic_used":400}'
+UQ="$(curl -s -b "$COOKIE" "$BASE/api/admin/users/$USER_ID/traffic")"
+python3 - "$UQ" <<'PY' && ok "配额计算正确（1000 上限 / 400 已用 → 剩 600）" || bad "配额计算错误"
+import json, sys
+d = json.loads(sys.argv[1])
+q = d['quota']
+assert q['traffic_limit'] == 1000, q
+assert q['traffic_used'] == 400, q
+assert q['remaining'] == 600, q
+assert q['exhausted'] is False, q
+assert q['unlimited'] is False, q
+assert 'series' in d['summary']
+PY
+
+# 超额
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X PATCH "$BASE/api/admin/users/$USER_ID" \
+  -H 'Content-Type: application/json' -d '{"traffic_used":1500}'
+UQ2="$(curl -s -b "$COOKIE" "$BASE/api/admin/users/$USER_ID/traffic")"
+python3 - "$UQ2" <<'PY' && ok "超额后标记 exhausted 且剩余归零" || bad "超额判定错误"
+import json, sys
+q = json.loads(sys.argv[1])['quota']
+assert q['exhausted'] is True, q
+assert q['remaining'] == 0, q
+PY
+
+# 不限量
+curl -s -o /dev/null -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X PATCH "$BASE/api/admin/users/$USER_ID" \
+  -H 'Content-Type: application/json' -d '{"traffic_limit":0}'
+UQ3="$(curl -s -b "$COOKIE" "$BASE/api/admin/users/$USER_ID/traffic")"
+python3 - "$UQ3" <<'PY' && ok "上限为 0 时视为不限量" || bad "不限量判定错误"
+import json, sys
+q = json.loads(sys.argv[1])['quota']
+assert q['unlimited'] is True, q
+assert q['remaining'] == -1, q
+PY
+
 head_ "8. 非白名单任务被拒"
 REJ_CODE="$(curl -s -o "$WORK/rej.json" -w '%{http_code}' -b "$COOKIE" -H "X-CSRF-Token: $CSRF" -X POST "$BASE/api/admin/servers/$SERVER_ID/tasks" \
   -H 'Content-Type: application/json' \

@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mmx-project/mmx/pkg/agentproto"
@@ -35,6 +36,8 @@ type Manager interface {
 	Control(action string) error
 	// Install 下载并安装 Xray 内核。
 	Install(ctx context.Context, opts InstallOptions) (InstallResult, error)
+	// QueryStats 拉取 Xray 的统计计数（按 email 维度的用户流量）。
+	QueryStats(ctx context.Context, opts StatsQueryOptions) (string, error)
 	// Uninstall 卸载。
 	Uninstall() error
 }
@@ -62,6 +65,9 @@ type ExternalManager struct {
 	Service   string
 	// DownloadBase 为空时用 DefaultDownloadBase；可指向自建镜像。
 	DownloadBase string
+
+	mu      sync.Mutex
+	apiPort int // 从最近一次应用的配置里解析出的 API 端口
 }
 
 // NewExternal 构造 external 模式的 Manager。
@@ -120,6 +126,8 @@ func (m *ExternalManager) ApplyConfig(cfg *agentproto.XrayConfig, rev string) er
 	if err != nil {
 		return err
 	}
+	m.rememberAPIPort(cfg)
+
 	// 先写临时文件，用 xray 自身做语法校验，通过后再原子替换
 	tmp := m.ConfigPath() + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
@@ -210,6 +218,11 @@ func (m *EmbeddedManager) Install(context.Context, InstallOptions) (InstallResul
 	return InstallResult{}, ErrNotImplemented
 }
 
+// QueryStats 尚未实现。
+func (m *EmbeddedManager) QueryStats(context.Context, StatsQueryOptions) (string, error) {
+	return "", ErrNotImplemented
+}
+
 // Control 尚未实现。
 func (m *EmbeddedManager) Control(string) error { return ErrNotImplemented }
 
@@ -235,6 +248,11 @@ func (m *NoopManager) ApplyConfig(*agentproto.XrayConfig, string) error { return
 // Install 无操作。
 func (m *NoopManager) Install(context.Context, InstallOptions) (InstallResult, error) {
 	return InstallResult{}, errors.New("xray_mode=none 的节点不支持安装 Xray")
+}
+
+// QueryStats 无数据。
+func (m *NoopManager) QueryStats(context.Context, StatsQueryOptions) (string, error) {
+	return "", errors.New("xray_mode=none 的节点没有统计数据")
 }
 
 // Control 忽略控制。

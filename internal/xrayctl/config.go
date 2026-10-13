@@ -18,6 +18,12 @@ import (
 	"github.com/mmx-project/mmx/pkg/agentproto"
 )
 
+// APITag 是 Xray 本地 API 的 tag（stats / handler 服务都挂在它上面）。
+const APITag = "api"
+
+// DefaultAPIPort 是 Xray API 的默认监听端口（仅回环）。
+const DefaultAPIPort = 10085
+
 // Options 控制生成的配置内容。
 type Options struct {
 	LogLevel     string // debug | info | warning | error；空则 warning
@@ -69,7 +75,7 @@ func Build(inbounds []storage.Inbound, clients map[string][]storage.InboundClien
 
 	if opts.EnableAPI {
 		cfg.API = map[string]any{
-			"tag":      "api",
+			"tag":      APITag,
 			"services": []string{"HandlerService", "StatsService"},
 		}
 		cfg.Stats = map[string]any{}
@@ -89,6 +95,18 @@ func Build(inbounds []storage.Inbound, clients map[string][]storage.InboundClien
 
 	// ---- inbounds ----
 	var tags []string
+
+	// API 本身需要一个 dokodemo-door 入站来承载请求。
+	// 缺少这一段时 api/stats 段形同虚设 —— 统计与在线人数都无法查询。
+	// 只监听回环地址，不对外暴露。
+	if opts.EnableAPI {
+		cfg.Inbounds = append(cfg.Inbounds, map[string]any{
+			"tag": APITag, "listen": "127.0.0.1", "port": opts.APIPort,
+			"protocol": "dokodemo-door",
+			"settings": map[string]any{"address": "127.0.0.1"},
+		})
+	}
+
 	for _, in := range inbounds {
 		if !in.Enabled {
 			continue
@@ -108,9 +126,12 @@ func Build(inbounds []storage.Inbound, clients map[string][]storage.InboundClien
 	}
 
 	// ---- routing ----
-	rules := []map[string]any{
-		// Xray 自身 API 流量不走出站
-		{"type": "field", "inboundTag": []string{"api"}, "outboundTag": "api"},
+	rules := []map[string]any{}
+	if opts.EnableAPI {
+		// API 流量不走出站，直接由 Xray 内部处理
+		rules = append(rules, map[string]any{
+			"type": "field", "inboundTag": []string{APITag}, "outboundTag": APITag,
+		})
 	}
 	if opts.BlockPrivate {
 		rules = append(rules, map[string]any{
@@ -176,3 +197,21 @@ func Canonical(cfg *agentproto.XrayConfig) ([]byte, error) {
 
 // jsonUnmarshal 是本包内部的 JSON 解包入口（集中一处便于将来换高性能实现）。
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+// APIPort 返回生成的配置中 API 的监听端口（供 Agent 查询 stats 使用）。
+func (r *BuildResult) APIPort() int {
+	if r == nil || r.Config == nil || r.Config.API == nil {
+		return 0
+	}
+	for _, in := range r.Config.Inbounds {
+		if in["tag"] == APITag {
+			if p, ok := in["port"].(int); ok {
+				return p
+			}
+			if p, ok := in["port"].(float64); ok {
+				return int(p)
+			}
+		}
+	}
+	return 0
+}

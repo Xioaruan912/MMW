@@ -501,6 +501,17 @@ func (c *Client) runTask(task agentproto.TaskPayload) (string, agentproto.RawArg
 	case agentproto.TaskNginxInstall, agentproto.TaskNginxUninstall:
 		return "", nil, xray.ErrNotImplemented
 
+	case agentproto.TaskXrayQueryStats:
+		raw, err := c.xrayMgr.QueryStats(context.Background(), xray.StatsQueryOptions{
+			Pattern: task.Args.GetString("pattern"),
+			Reset:   task.Args.GetBool("reset"),
+		})
+		if err != nil {
+			return "", nil, err
+		}
+		return "统计已拉取（" + fmt.Sprintf("%d 字节", len(raw)) + "）",
+			agentproto.RawArgs{"raw": raw}, nil
+
 	case agentproto.TaskProbeCollectNow:
 		m, err := c.sampler.Collect()
 		if err != nil {

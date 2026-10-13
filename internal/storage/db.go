@@ -222,6 +222,18 @@ func (db *DB) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrationV5SQL 是每用户日流量。
+const migrationV5SQL = `
+CREATE TABLE IF NOT EXISTS user_traffic_daily (
+    day     TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    up      INTEGER NOT NULL DEFAULT 0,
+    down    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_traffic_user ON user_traffic_daily(user_id);
+`
+
 // migrationV4SQL 是接口令牌与双因子。
 const migrationV4SQL = `
 CREATE TABLE IF NOT EXISTS api_tokens (
@@ -282,6 +294,11 @@ func init() {
 		Version: 4,
 		Name:    "api_tokens_and_totp",
 		SQL:     migrationV4SQL,
+	})
+	migrations = append(migrations, migration{
+		Version: 5,
+		Name:    "user_traffic_daily",
+		SQL:     migrationV5SQL,
 	})
 }
 
